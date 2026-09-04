@@ -194,6 +194,7 @@ gets the trim its `building=*` value calls for:
 | House | Pitched roof, chimney, porch over the door |
 | Apartments | Cornice, balconies on the upper floors, entrance porch |
 | Shop | Fascia signboard, projecting awning, roof clutter |
+| Restaurant / cafe | Real OSM name on the entrance, cuisine/brand-coloured sign and awning |
 | Office | Cornice, entrance canopy, rooftop plant |
 | School / hospital | Wide covered entrance, rooftop plant |
 | Church | Belfry tower and a slate spire with a finial |
@@ -210,6 +211,21 @@ hand-traced footprint carries forty edges for what is visually a rectangle, so
 the trim runs along a simplified outline. Balconies get a hard per-building
 allowance: uncapped, they cost more than every other piece of geometry in the
 city combined. As built, detail is around 470 triangles per building.
+
+Restaurants are associated before the building mesh is made. A food POI is
+matched to the smallest footprint containing it, including an Overture
+gap-filling footprint when OSM maps the business as a node but not its building.
+Only a short nearest-wall fallback is allowed, so a restaurant is not guessed
+onto a building across the street. Its real `name`, `brand`, `cuisine`,
+`brand:colour`, drive-through and outdoor-seating tags then shape the storefront.
+
+Names are assembled from one shared glyph atlas rather than generating a new
+texture and material for every business. This keeps an independent place such
+as “Homer's Dine In” unique without turning a dense restaurant district into
+hundreds of extra texture downloads and draw calls. OSM-linked image and
+Wikimedia references are retained with the restaurant metadata for a future
+licensed-photo pass; arbitrary web photos are not scraped or baked into the
+world because their licence, attribution and facade perspective are unknown.
 
 ### Natural ground, with optional aerial photographs
 

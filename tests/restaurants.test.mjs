@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {
   FeatureSet, restaurantFromTags, assignRestaurantBusinesses,
 } from '../src/world/features.js';
-import { restaurantSignLabel, restaurantPalette } from '../src/world/restaurants.js';
+import {
+  restaurantSignLabel, restaurantPalette, restaurantFacadeRight,
+} from '../src/world/restaurants.js';
 import { area, bounds, centroid } from '../src/world/geometry.js';
 
 let passed = 0, failed = 0;
@@ -102,6 +104,11 @@ test('cuisine and explicit brand colours produce distinct storefront palettes', 
   const branded = restaurantPalette({ cuisines: [], category: 'restaurant', colour: 0x123456 }, () => 0);
   assert.notEqual(mexican.panel, sushi.panel);
   assert.equal(branded.panel, 0x123456);
+});
+
+test('restaurant lettering runs left-to-right for an outside viewer', () => {
+  assert.deepEqual(restaurantFacadeRight(0, 1), [1, -0]);
+  assert.deepEqual(restaurantFacadeRight(1, 0), [0, -1]);
 });
 
 console.log(out.join('\n'));

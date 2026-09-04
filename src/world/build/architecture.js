@@ -17,7 +17,9 @@ import { box, cylinder } from './props.js';
 import { insetRing, offsetRing, orientedBounds, centroid, perimeter, simplify } from '../geometry.js';
 import { clamp, lerp } from '../../core/util.js';
 import { signGlyphUv } from '../../gfx/textures.js';
-import { restaurantSignLabel, restaurantPalette } from '../restaurants.js';
+import {
+  restaurantSignLabel, restaurantPalette, restaurantFacadeRight,
+} from '../restaurants.js';
 
 /**
  * Add the detail appropriate to a building's type.
@@ -170,7 +172,10 @@ function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
   const accent = colourToLinear(palette.accent);
   const white = colourToLinear(0xffffff);
   const nx = door.nx, nz = door.nz;
-  const ax = -nz, az = nx;
+  // This is the viewer's right while standing outside and facing the wall.
+  // Using the opposite edge tangent makes an otherwise-correct glyph atlas
+  // spell every business name backward from the pavement.
+  const [ax, az] = restaurantFacadeRight(nx, nz);
   const angle = Math.atan2(nz, nx);
 
   const available = clamp((door.edgeLength || 7) - 0.45, 2.2, 10.5);
@@ -193,14 +198,14 @@ function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
     const t = start + i * charW;
     const left = t - charW * 0.48, right = t + charW * 0.48;
     const [u0, v0, u1, v1] = signGlyphUv(label[i]);
-    // Right-to-left vertex order makes the geometric normal face along the
-    // stored outward facade normal rather than back into the wall.
+    // Left-to-right vertex order makes the geometric normal face along the
+    // stored outward facade normal and keeps the word readable from outside.
     textAcc.addQuad(
-      [door.x + nx * textDepth + ax * right, textY0, door.z + nz * textDepth + az * right],
       [door.x + nx * textDepth + ax * left, textY0, door.z + nz * textDepth + az * left],
-      [door.x + nx * textDepth + ax * left, textY1, door.z + nz * textDepth + az * left],
+      [door.x + nx * textDepth + ax * right, textY0, door.z + nz * textDepth + az * right],
       [door.x + nx * textDepth + ax * right, textY1, door.z + nz * textDepth + az * right],
-      [u1, v0, u0, v1], white);
+      [door.x + nx * textDepth + ax * left, textY1, door.z + nz * textDepth + az * left],
+      [u0, v0, u1, v1], white);
   }
 
   // A shallow entrance awning carries the cuisine/brand accent. Unlike the

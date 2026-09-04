@@ -40,3 +40,11 @@ export function restaurantPalette(restaurant, rng = Math.random) {
   ];
   return choices[Math.floor(rng() * choices.length) % choices.length];
 }
+
+/**
+ * World-space direction which reads left-to-right to somebody standing in
+ * front of a facade and looking back along the outward normal.
+ */
+export function restaurantFacadeRight(nx, nz) {
+  return [nz, -nx];
+}

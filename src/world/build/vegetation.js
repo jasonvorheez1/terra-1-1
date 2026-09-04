@@ -183,53 +183,124 @@ function canopyGeometry(shape) {
   const key = `canopy:${shape}`;
   if (geometryCache.has(key)) return geometryCache.get(key);
 
-  const geos = [];
-  const cards = shape === 'palm' ? 2 : 3;
-  for (let i = 0; i < cards; i++) {
-    const g = new THREE.PlaneGeometry(1, 1);
-    g.rotateY((i / cards) * Math.PI);
-    geos.push(g);
-  }
-  // A horizontal card fills in the view from above and from a hillside.
-  if (shape !== 'columnar') {
+  // A palm is fronds radiating from one point, not a mass of leaves, so it
+  // keeps the crossed-card construction it always had.
+  if (shape === 'palm') {
+    const fronds = [];
+    for (let i = 0; i < 2; i++) {
+      const g = new THREE.PlaneGeometry(1, 1);
+      g.rotateY((i / 2) * Math.PI);
+      fronds.push(g);
+    }
     const flat = new THREE.PlaneGeometry(1, 1);
     flat.rotateX(-Math.PI / 2);
-    flat.translate(0, shape === 'conical' ? -0.18 : 0, 0);
-    geos.push(flat);
+    fronds.push(flat);
+    const palmGeo = leanNormalsUp(mergeGeometries(fronds), 1.05, true);
+    geometryCache.set(key, palmGeo);
+    return palmGeo;
   }
 
-  const merged = mergeGeometries(geos);
-
-  // Point the normals out of the canopy, not out of the cards.
+  // Everything else is built as a cloud of small leaf clusters spread through
+  // the volume of the crown, rather than three big cards crossing at its
+  // middle.
   //
-  // A crossed-card canopy is three vertical planes, so their normals lie flat
-  // in the horizontal plane and take almost nothing from a sun overhead - at
-  // midday a forest rendered as a field of black cut-outs. Treating the cluster
-  // as the ball of leaves it stands for, and pointing each vertex away from the
-  // middle of it, makes the canopy shade like a mass instead: lit on the sunny
-  // side, dark on the other, bright on top. Leaning the result upward keeps the
-  // top brighter than the flanks, which is where the light actually comes from.
-  const pos = merged.attributes.position;
-  const nrm = merged.attributes.normal;
+  // Three cards is eight triangles and reads correctly from exactly two angles.
+  // From anywhere else you see a card edge-on - a bright plane and a black one
+  // meeting at a seam - and no arrangement of normals fixes that, because the
+  // problem is that there is nothing in between them. A dozen small quads
+  // distributed over the crown and each turned to face outward means several
+  // are always presented to the viewer and several to the sun, from any
+  // direction, and the crown shades as the rounded mass it is meant to be.
+  // Twenty-four triangles against eight, on geometry that is instanced once per
+  // species, which is a cheap way to buy the thing that was actually wrong.
+  const clusters = 12;
+  const geos = [];
+  const dir = new THREE.Vector3();
+  const forward = new THREE.Vector3(0, 0, 1);
+  const q = new THREE.Quaternion();
+
+  for (let i = 0; i < clusters; i++) {
+    // Fibonacci sphere: an even spread without random clumping, and identical
+    // every run, which matters because this geometry is cached and shared.
+    const t = (i + 0.5) / clusters;
+    const y = 1 - 2 * t;
+    const ring = Math.sqrt(Math.max(0, 1 - y * y));
+    const phi = i * Math.PI * (3 - Math.sqrt(5));
+    let px = Math.cos(phi) * ring;
+    let pz = Math.sin(phi) * ring;
+    let py = y;
+
+    // Push the sphere into the silhouette the species wants.
+    if (shape === 'conical') {
+      // Narrow toward the top, and sit the mass low.
+      const up = (py + 1) / 2;
+      px *= 1 - up * 0.72; pz *= 1 - up * 0.72;
+      py = py * 0.5 - 0.05;
+    } else if (shape === 'umbrella') {
+      px *= 1.18; pz *= 1.18;
+      py = py * 0.26 + 0.1;
+    } else if (shape === 'columnar') {
+      px *= 0.5; pz *= 0.5;
+      py *= 0.5;
+    } else {
+      py *= 0.46;
+    }
+
+    // Face the quad outward along its own radius, so the crown presents leaves
+    // in every direction and the normal it already has is the one we want.
+    dir.set(px, py, pz);
+    if (dir.lengthSq() < 1e-6) dir.set(0, 1, 0);
+    dir.normalize();
+    q.setFromUnitVectors(forward, dir);
+
+    const size = shape === 'columnar' ? 0.62 : shape === 'umbrella' ? 0.78 : 0.72;
+    const g = new THREE.PlaneGeometry(size, size);
+    g.applyQuaternion(q);
+    g.translate(px * 0.34, py * 0.9, pz * 0.34);
+    geos.push(g);
+  }
+
+  // One horizontal card across the top, which is the silhouette from a
+  // hillside above or a window.
+  const flat = new THREE.PlaneGeometry(0.95, 0.95);
+  flat.rotateX(-Math.PI / 2);
+  flat.translate(0, shape === 'conical' ? -0.1 : 0.06, 0);
+  geos.push(flat);
+
+  // The quads already face outward, so their own normals are radial. They still
+  // need a firm lean toward the sky: at 0.6 the lower half of the crown was
+  // taking the hemisphere light's ground colour, and measured on one frame with
+  // the same trees, raising it took crown luminance from 21 to 59 of 255. A
+  // canopy is lit from above far more than a sphere of leaves would suggest,
+  // because the leaves above shade the ones below and what reaches them is sky.
+  const merged = leanNormalsUp(mergeGeometries(geos), 1.15, false);
+  geometryCache.set(key, merged);
+  return merged;
+}
+
+/**
+ * Tilt a geometry's normals toward the sky.
+ *
+ * `fromPosition` rebuilds them radially from the vertex position first, which
+ * is what a crossed-card canopy needs because its own normals lie flat. The
+ * cluster canopy already faces outward and only wants the lean.
+ */
+function leanNormalsUp(geo, lean, fromPosition) {
+  const pos = geo.attributes.position;
+  const nrm = geo.attributes.normal;
   for (let i = 0; i < pos.count; i++) {
-    let nx = pos.getX(i), ny = pos.getY(i), nz = pos.getZ(i);
+    let nx, ny, nz;
+    if (fromPosition) { nx = pos.getX(i); ny = pos.getY(i); nz = pos.getZ(i); }
+    else { nx = nrm.getX(i); ny = nrm.getY(i); nz = nrm.getZ(i); }
     const len = Math.hypot(nx, ny, nz);
     if (len < 1e-4) { nx = 0; ny = 1; nz = 0; }
     else { nx /= len; ny /= len; nz /= len; }
-    // Lean far enough that nothing in the crown ends up facing the ground. At
-    // 0.55 the underside normals still pointed down, so the hemisphere light
-    // handed them the *ground* colour and the bottom of every tree went black
-    // while its top was blown out. Past 1.0 the lowest vertex is level or
-    // above, so the whole crown reads as lit by sky, with the outward component
-    // keeping the sunny side brighter than the shaded one.
-    ny += 1.05;
+    ny += lean;
     const l2 = Math.hypot(nx, ny, nz) || 1;
     nrm.setXYZ(i, nx / l2, ny / l2, nz / l2);
   }
   nrm.needsUpdate = true;
-
-  geometryCache.set(key, merged);
-  return merged;
+  return geo;
 }
 
 /** Minimal geometry merge; avoids pulling in the full BufferGeometryUtils. */

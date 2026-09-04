@@ -8,7 +8,8 @@
     "start": "node tools/serve.mjs 8123",
     "test": "node tests/geo.test.mjs && node tests/tags.test.mjs && node tests/geometry.test.mjs && node tests/solar.test.mjs && node tests/interior.test.mjs && node tests/overture.test.mjs && node tests/restaurants.test.mjs",
     "test:live": "node tests/osm.integration.mjs",
-    "test:small-towns": "node tests/small-towns.integration.mjs"
+    "test:small-towns": "node tests/small-towns.integration.mjs",
+    "test:restaurants": "node tests/restaurants.integration.mjs"
   },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
