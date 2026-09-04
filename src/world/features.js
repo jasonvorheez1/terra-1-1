@@ -718,6 +718,7 @@ export function mergeOvertureRoads(fs, records, projection, opts = {}) {
       rawPts: line,
       spec,
       tags,
+      name: tags.name || null,
       closed: false,
       // No connector graph is read, so every end is treated as meeting the
       // street. That is the safe assumption: it ramps a bridge down rather

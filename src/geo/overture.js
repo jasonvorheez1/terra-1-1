@@ -25,13 +25,20 @@ const CACHE_AGE = 1000 * 60 * 60 * 24 * 365;
 
 /** PMTiles byte source backed by the same IndexedDB cache as the other maps. */
 class CachedRangeSource {
-  constructor(url) { this.url = url; }
+  constructor(url) {
+    this.url = url;
+    // The cache key has to name the archive, not just the byte range. With one
+    // theme it did not matter; the moment a second was added, transportation
+    // asked for bytes 0-16383 and was handed the buildings archive's header out
+    // of the cache, so every tile lookup in it came back empty.
+    this.theme = (url.match(/\/([^/]+)\.pmtiles$/) || [null, 'overture'])[1];
+  }
   getKey() { return this.url; }
 
   async getBytes(offset, length, signal = null) {
     const data = await fetchCached(this.url, {
       as: 'arrayBuffer',
-      cacheKey: `overture:${OVERTURE_RELEASE}:range:${offset}:${length}`,
+      cacheKey: `overture:${OVERTURE_RELEASE}:${this.theme}:range:${offset}:${length}`,
       maxAgeMs: CACHE_AGE,
       retries: 2,
       timeoutMs: 30000,
