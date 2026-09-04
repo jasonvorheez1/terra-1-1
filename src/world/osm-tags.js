@@ -479,23 +479,31 @@ export function regionForLatLon(lat, lon) {
   // Deliberately coarse. The point is not to draw borders, it is that the
   // building stock of northern Europe does not look like the building stock of
   // Arizona, and picking by continent-sized box gets most of that.
-  if (lat > 35 && lat < 72 && lon > -11 && lon < 42) {
+  // Order matters: the narrow boxes are tested before the broad ones they sit
+  // inside. Arabia and Iran fall within any sane bounding box for Africa, and
+  // an unordered test put Tehran and Riyadh in it.
+  if (lat > 12 && lat < 42 && lon > 34 && lon < 63) return 'middleEast';
+  if (lat > 5 && lat < 37 && lon > 60 && lon < 92) return 'southAsia';
+  if (lat > 26 && lat < 46 && lon > 100 && lon < 146) return 'eastAsia';
+  if (lat > -11 && lat < 29 && lon > 92 && lon < 142) return 'southeastAsia';
+  if (lat < -9 && lat > -48 && lon > 112 && lon < 180) return 'oceania';
+
+  if (lat > 35 && lat < 72 && lon > -25 && lon < 60) {
     if (lat < 45 && lon > -10 && lon < 30) return 'mediterranean';
-    if (lat > 51 && lon > -11 && lon < 32) return 'northEurope';
+    // East to the Urals: Moscow is birch and spruce country, not Bavaria.
+    if (lat > 51) return 'northEurope';
     return 'centralEurope';
   }
-  if (lat > 14 && lat < 72 && lon > -170 && lon < -52) {
+
+  // Mexico and the Caribbean belong with Latin America, not with Ohio, so this
+  // is tested before the North American box that would otherwise swallow them.
+  if (lat < 27 && lat > -56 && lon > -118 && lon < -33) return 'latinAmerica';
+  if (lat > 24 && lat < 72 && lon > -170 && lon < -52) {
     // The dry south-west builds in stucco and adobe colours; the rest of North
     // America in painted siding and brick.
     if (lat < 38 && lon > -125 && lon < -96) return 'southwest';
     return 'northAmerica';
   }
-  if (lat > 18 && lat < 46 && lon > 100 && lon < 146) return 'eastAsia';
-  if (lat < 14 && lat > -56 && lon > -95 && lon < -33) return 'latinAmerica';
-  // These two carry no facade palette of their own - they fall back to the
-  // generic one - but the trees growing in them are nothing like anywhere
-  // else's, and the vegetation tables key off the same region.
-  if (lat < -9 && lat > -48 && lon > 112 && lon < 180) return 'oceania';
   if (lat < 37 && lat > -35 && lon > -18 && lon < 52) return 'africa';
   return 'default';
 }

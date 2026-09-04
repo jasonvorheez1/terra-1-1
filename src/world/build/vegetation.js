@@ -48,6 +48,8 @@ export const SPECIES = {
   baobab:    { foliage: 'sparse',    bark: 'rough', shape: 'umbrella', h: [9, 20],  crown: 0.24, spread: 1.15, colours: [0x6b7444, 0x76804d] },
   jacaranda: { foliage: 'broadleaf', bark: 'rough', shape: 'round',    h: [8, 16],  crown: 0.55, spread: 0.9,  colours: [0x6a6a9c, 0x7576a8, 0x5d7a4a] },
   joshua:    { foliage: 'sparse',    bark: 'rough', shape: 'umbrella', h: [4, 11],  crown: 0.4,  spread: 0.7,  colours: [0x5c6b48, 0x667551] },
+  banyan:    { foliage: 'broadleaf', bark: 'rough', shape: 'umbrella', h: [10, 22], crown: 0.4,  spread: 1.45, colours: [0x3f6330, 0x486c37, 0x365828] },
+  datePalm:  { foliage: 'palm',      bark: 'palm',  shape: 'palm',     h: [8, 22],  crown: 0.2,  spread: 0.65, colours: [0x5d7a42, 0x67854b] },
 };
 
 const BIOME_SPECIES = {
@@ -132,6 +134,24 @@ const REGIONAL_SPECIES = {
     savanna:            [{ id: 'acacia', w: 5 }, { id: 'baobab', w: 2 }, { id: 'shrub', w: 4 }],
     tropicalSeasonal:   [{ id: 'acacia', w: 3 }, { id: 'baobab', w: 2 }, { id: 'palm', w: 3 }, { id: 'jungle', w: 2 }],
     desert:             [{ id: 'palm', w: 2 }, { id: 'shrub', w: 6 }, { id: 'acacia', w: 2 }],
+  },
+  middleEast: {
+    desert:             [{ id: 'datePalm', w: 3 }, { id: 'shrub', w: 6 }, { id: 'acacia', w: 2 }],
+    mediterranean:      [{ id: 'datePalm', w: 3 }, { id: 'olive', w: 3 }, { id: 'cypress', w: 2 }, { id: 'shrub', w: 3 }],
+    temperateGrass:     [{ id: 'shrub', w: 6 }, { id: 'datePalm', w: 2 }, { id: 'olive', w: 2 }],
+    savanna:            [{ id: 'acacia', w: 4 }, { id: 'datePalm', w: 2 }, { id: 'shrub', w: 5 }],
+  },
+  southAsia: {
+    tropicalSeasonal:   [{ id: 'banyan', w: 3 }, { id: 'palm', w: 3 }, { id: 'jungle', w: 3 }, { id: 'acacia', w: 1 }],
+    tropicalRainforest: [{ id: 'jungle', w: 5 }, { id: 'banyan', w: 2 }, { id: 'palm', w: 3 }],
+    savanna:            [{ id: 'banyan', w: 2 }, { id: 'acacia', w: 4 }, { id: 'shrub', w: 4 }],
+    desert:             [{ id: 'datePalm', w: 2 }, { id: 'acacia', w: 3 }, { id: 'shrub', w: 6 }],
+    temperateBroadleaf: [{ id: 'banyan', w: 2 }, { id: 'oak', w: 3 }, { id: 'pine', w: 2 }, { id: 'palm', w: 2 }],
+  },
+  southeastAsia: {
+    tropicalRainforest: [{ id: 'jungle', w: 5 }, { id: 'palm', w: 3 }, { id: 'bamboo', w: 2 }, { id: 'kapok', w: 1 }],
+    tropicalSeasonal:   [{ id: 'palm', w: 4 }, { id: 'bamboo', w: 3 }, { id: 'jungle', w: 3 }, { id: 'banyan', w: 1 }],
+    temperateBroadleaf: [{ id: 'bamboo', w: 3 }, { id: 'jungle', w: 3 }, { id: 'palm', w: 2 }],
   },
   oceania: {
     temperateBroadleaf: [{ id: 'eucalyptus', w: 6 }, { id: 'shrub', w: 2 }, { id: 'pine', w: 1 }],
