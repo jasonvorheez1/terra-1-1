@@ -1,2 +1,12 @@
-# Auto detect text files and perform LF normalization
+# Store text with LF in the repository and check it out native. The working copy
+# here is a mix of CRLF and LF; without this a clone on macOS or Linux shows a
+# whole-file diff on anything touched.
 * text=auto
+
+# vendor/ is redistributed third-party code, not part of this project's source.
+# Marking it keeps GitHub's language bar and diffs honest — 1.5 MB of three.js
+# would otherwise drown out everything actually written here.
+vendor/** linguist-vendored
+
+# data/ndvi-lut.js is a generated colour lookup table, not hand-written source.
+data/ndvi-lut.js linguist-generated

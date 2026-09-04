@@ -1,0 +1,25 @@
+# The game caches OSM regions, terrain tiles and NDVI rasters to disk when run
+# through a server that permits it. None of that belongs in the repository — it
+# is all re-fetchable, and some of it is large.
+cache/
+*.cache
+
+# Node is only used for the test runner and the static server; there are no
+# dependencies to install, so a lockfile here would be noise.
+node_modules/
+npm-debug.log*
+
+# Editors and OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/
+
+# Scratch space
+tmp/
+*.log
+
+# A clone of the GitHub repo this project pushes to, left in the tree.
+terra1-1/

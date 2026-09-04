@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "terra",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/serve.mjs",
+        "8123"
+      ],
+      "port": 8123
+    }
+  ]
+}

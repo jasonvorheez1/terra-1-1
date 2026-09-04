@@ -1,0 +1,12 @@
+{
+  "name": "terra-ambulate",
+  "version": "1.0.0",
+  "description": "A walking simulator of the real Earth, built from OpenStreetMap, NASA and open elevation data.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.mjs 8123",
+    "test": "node tests/geo.test.mjs && node tests/tags.test.mjs && node tests/geometry.test.mjs && node tests/solar.test.mjs && node tests/interior.test.mjs",
+    "test:live": "node tests/osm.integration.mjs"
+  }
+}

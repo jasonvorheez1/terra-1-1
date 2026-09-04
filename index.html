@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Terra Ambulate — a walking simulator of the real Earth</title>
+<link rel="stylesheet" href="styles/ui.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🌍</text></svg>">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/",
+    "three-mesh-bvh": "./vendor/three-mesh-bvh.module.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="viewport"></canvas>
+
+<!-- Heads-up display, shown only while walking -->
+<div id="hud" class="hidden" aria-hidden="true">
+  <div id="crosshair"></div>
+  <div id="hud-top">
+    <div id="compass">
+      <div id="compass-strip"></div>
+      <div id="compass-needle"></div>
+    </div>
+  </div>
+  <div id="hud-left">
+    <div id="place-name"></div>
+    <div id="street-name"></div>
+    <div id="coords"></div>
+  </div>
+  <div id="hud-right">
+    <div id="clock-time"></div>
+    <div id="clock-phase"></div>
+    <div id="weather-line"></div>
+  </div>
+  <div id="hud-bottom">
+    <div id="stamina-wrap"><div id="stamina-bar"></div></div>
+    <div id="distance-walked"></div>
+  </div>
+  <div id="interact-prompt" class="hidden"></div>
+  <div id="look-hint" class="hidden">Click to capture the mouse &middot; or hold the left button and drag to look</div>
+  <div id="toast-stack"></div>
+  <div id="loading-pip" class="hidden"><span class="spinner"></span><span id="loading-pip-text"></span></div>
+</div>
+
+<!-- Cell-transition fade, used when stepping through a door -->
+<div id="fade"></div>
+
+<!-- Debug overlay -->
+<pre id="debug" class="hidden"></pre>
+
+<!-- Screens -->
+<div id="screens">
+
+  <!-- Boot / title -->
+  <section id="screen-title" class="screen active">
+    <div class="title-block">
+      <h1>Terra Ambulate</h1>
+      <p class="tagline">Walk anywhere on Earth.</p>
+      <nav class="menu" id="title-menu">
+        <button data-action="new" class="primary">Choose a place</button>
+        <button data-action="resume" id="btn-resume" hidden>Continue</button>
+        <button data-action="random">Take me somewhere</button>
+        <button data-action="settings">Settings</button>
+        <button data-action="controls">Controls</button>
+        <button data-action="about">About &amp; credits</button>
+      </nav>
+    </div>
+    <footer class="attrib">
+      Map data © OpenStreetMap contributors · Elevation: AWS Terrain Tiles ·
+      Vegetation: NASA GIBS MODIS NDVI · Imagery: Esri World Imagery
+    </footer>
+  </section>
+
+  <!-- Location picker -->
+  <section id="screen-place" class="screen">
+    <div class="panel wide">
+      <header class="panel-head">
+        <h2>Where would you like to walk?</h2>
+        <button class="ghost" data-action="back">Back</button>
+      </header>
+
+      <div class="place-layout">
+        <div class="place-search">
+          <label class="field">
+            <span>Search for a place</span>
+            <input id="place-query" type="search" placeholder="Kyoto, Machu Picchu, 48.8584 2.2945…" autocomplete="off" spellcheck="false">
+          </label>
+          <div id="place-results" class="results"></div>
+
+          <div class="preset-block">
+            <h3>Or start somewhere famous</h3>
+            <div id="preset-list" class="presets"></div>
+          </div>
+        </div>
+
+        <div class="place-preview">
+          <div id="map-wrap">
+            <canvas id="minimap"></canvas>
+            <div id="map-pin"></div>
+            <div id="map-hint">Drag to pan · scroll to zoom · click to drop the pin</div>
+          </div>
+          <div id="place-info" class="place-info">
+            <div class="place-info-name">Nowhere yet</div>
+            <div class="place-info-coords"></div>
+            <div class="place-info-meta"></div>
+          </div>
+
+          <div class="start-options">
+            <label class="field inline">
+              <span>Time</span>
+              <select id="opt-time">
+                <option value="local">Real time there</option>
+                <option value="fixed">Pick an hour</option>
+                <option value="cycle">Accelerated day</option>
+              </select>
+            </label>
+            <label class="field inline" id="opt-hour-field" hidden>
+              <span>Hour</span>
+              <input id="opt-hour" type="range" min="0" max="23.75" step="0.25" value="10.5">
+              <output id="opt-hour-out">10:30</output>
+            </label>
+            <label class="field inline">
+              <span>Date</span>
+              <input id="opt-date" type="date">
+            </label>
+            <label class="field inline">
+              <span>Weather</span>
+              <select id="opt-weather">
+                <option value="auto">Plausible for the season</option>
+                <option value="clear">Clear</option>
+                <option value="cloudy">Cloudy</option>
+                <option value="overcast">Overcast</option>
+                <option value="rain">Rain</option>
+                <option value="snow">Snow</option>
+                <option value="fog">Fog</option>
+              </select>
+            </label>
+          </div>
+
+          <button id="btn-start" class="primary large" disabled>Start walking</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Settings -->
+  <section id="screen-settings" class="screen">
+    <div class="panel wide">
+      <header class="panel-head">
+        <h2>Settings</h2>
+        <button class="ghost" data-action="back">Back</button>
+      </header>
+      <div class="tabs" id="settings-tabs"></div>
+      <div class="settings-body" id="settings-body"></div>
+      <footer class="panel-foot">
+        <button class="ghost" id="btn-reset-settings">Reset everything to defaults</button>
+      </footer>
+    </div>
+  </section>
+
+  <!-- Controls -->
+  <section id="screen-controls" class="screen">
+    <div class="panel">
+      <header class="panel-head">
+        <h2>Controls</h2>
+        <button class="ghost" data-action="back">Back</button>
+      </header>
+      <div id="bindings-body" class="bindings"></div>
+      <footer class="panel-foot">
+        <button class="ghost" id="btn-reset-bindings">Restore defaults</button>
+      </footer>
+    </div>
+  </section>
+
+  <!-- About -->
+  <section id="screen-about" class="screen">
+    <div class="panel">
+      <header class="panel-head">
+        <h2>About</h2>
+        <button class="ghost" data-action="back">Back</button>
+      </header>
+      <div class="prose">
+        <p><strong>Terra Ambulate</strong> reconstructs any point on Earth from open data
+        and lets you walk around it, at 1.4 metres per second, in real time.</p>
+
+        <h3>Where the world comes from</h3>
+        <ul>
+          <li><strong>Buildings, streets, tunnels, bridges, walls, trees, benches</strong> —
+              <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>,
+              queried live through the Overpass API. Heights, storey counts, roof shapes,
+              materials and colours are read from the tags where mappers have supplied
+              them, and inferred from building type and footprint where they have not.</li>
+          <li><strong>Terrain</strong> — the AWS
+              <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a>
+              open dataset (Mapzen terrarium encoding, from SRTM and national elevation models).</li>
+          <li><strong>Vegetation</strong> — NASA
+              <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">GIBS</a>
+              MODIS Terra 16-day NDVI. The satellite's vegetation index decides how densely
+              the world is planted, how green it reads, and which biome the species palette
+              comes from. A parched August park is parched here too.</li>
+          <li><strong>Aerial imagery</strong> — Esri World Imagery, draped over the terrain and
+              over flat roofs. A satellite photograph is a view from directly overhead, which
+              is exactly what a flat roof looks like, so the roofs you see are real pictures of
+              those roofs. Facades cannot come from aerial imagery — they are not visible from
+              above — so those stay generated.</li>
+          <li><strong>Place search</strong> — OpenStreetMap Nominatim.</li>
+          <li><strong>The sun and moon</strong> — computed, not faked: the NOAA solar position
+              algorithm, from the real date, time and coordinates. Midsummer in Svalbard
+              genuinely never gets dark.</li>
+        </ul>
+
+        <h3>What is invented</h3>
+        <p>Interiors are procedurally generated: OSM knows a building's outline and its
+        purpose, not its floor plan. Rooms, corridors, stairs and furniture are laid out
+        from a seed derived from the building's OSM id, so a given building looks the same
+        every time you walk into it.</p>
+        <p>They load as <strong>cells</strong>, in the manner of Fallout or Morrowind.
+        Buildings are solid from the street; walk up to a front door and press
+        <kbd>E</kbd> to go in. Only one interior exists at a time, and while you are
+        inside it the whole outdoor world is unloaded — hidden, and taken out of the
+        collision layer the character is tested against. That is a deliberate
+        performance decision: a city block holds dozens of enterable buildings, and
+        keeping them all resident would cost geometry and collision memory for rooms
+        nobody is standing in. Loading one on demand drops the physics from a few
+        hundred thousand triangles to a few thousand, which is what lets an interior
+        afford seven floors of rooms, stairs and furniture.</p>
+        <p>Facade textures, pitched roof tiles, foliage, street furniture and ambient sound are
+        all generated at load time. The game ships no image or audio files.</p>
+        <p>Each building also gets the architectural trim its type calls for: a chimney and a
+        porch on a house, a cornice and balconies on a block of flats, a fascia and an awning on
+        a shop, a covered entrance on a school, a portico on a civic building, a belfry and spire
+        on a church.</p>
+
+        <h3>Please be kind to the servers</h3>
+        <p>Overpass, Nominatim and GIBS are free community and public infrastructure.
+        Everything downloaded is cached locally, and requests are rate limited. If a
+        map server is busy the game fails over to a mirror and keeps walking.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Loading -->
+  <section id="screen-loading" class="screen">
+    <div class="loading-inner">
+      <div class="loading-globe"><div class="loading-ring"></div></div>
+      <h2 id="loading-title">Assembling the world</h2>
+      <div class="progress"><div id="loading-bar"></div></div>
+      <p id="loading-detail">Contacting map servers…</p>
+      <p id="loading-tip" class="tip"></p>
+      <button class="ghost" id="btn-cancel-load">Cancel</button>
+    </div>
+  </section>
+
+  <!-- Pause -->
+  <section id="screen-pause" class="screen">
+    <div class="panel narrow">
+      <header class="panel-head"><h2>Paused</h2></header>
+      <nav class="menu">
+        <button data-action="resume" class="primary">Resume</button>
+        <button data-action="settings">Settings</button>
+        <button data-action="controls">Controls</button>
+        <button data-action="photo">Photo mode</button>
+        <button data-action="place">Travel elsewhere</button>
+        <button data-action="title">Quit to title</button>
+      </nav>
+      <div id="pause-summary" class="pause-summary"></div>
+    </div>
+  </section>
+
+  <!-- Map -->
+  <section id="screen-map" class="screen">
+    <div class="panel wide">
+      <header class="panel-head">
+        <h2>Map</h2>
+        <button class="ghost" data-action="back">Close</button>
+      </header>
+      <canvas id="worldmap"></canvas>
+      <div class="map-legend" id="map-legend"></div>
+    </div>
+  </section>
+
+</div>
+
+<noscript>
+  <div class="noscript">This is a 3D game and needs JavaScript and WebGL.</div>
+</noscript>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
