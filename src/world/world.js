@@ -24,6 +24,7 @@ import { buildProps, buildBarriers } from './build/props.js';
 import { collectTrees, buildTreeInstances, GroundCover } from './build/vegetation.js';
 import { CollisionBuilder, CollisionWorld, SURFACE_IDS } from '../physics/collider.js';
 import { bounds, centroid, area, cleanRing, pointInPolygon } from './geometry.js';
+import { setFacadeRegion } from './osm-tags.js';
 import { clamp, lerp } from '../core/util.js';
 
 export const CHUNK_SIZE = 256;
@@ -157,6 +158,8 @@ export class World {
     this.clear();
     this.origin = { lat, lon };
     this.projection.setOrigin(lat, lon);
+    // Facade palettes are regional; a session has one location.
+    setFacadeRegion(lat, lon);
     this.date = date;
     this.ready = false;
 

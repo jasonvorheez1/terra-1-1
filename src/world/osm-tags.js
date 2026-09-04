@@ -460,8 +460,100 @@ const PALETTES = {
   generic:    [0xc6bfb1, 0xb5ada0, 0xd2cbbd, 0xa79f92, 0xdad3c5],
 };
 
+/**
+ * Where in the world we are building, for the palettes below.
+ *
+ * Set once per session from the origin rather than threaded through every call
+ * site: a session has one location, and the alternative is passing a region
+ * through facadeSpec, extractFeatures and every generator that makes a
+ * building.
+ */
+let facadeRegion = 'default';
+
+export function setFacadeRegion(lat, lon) {
+  facadeRegion = regionForLatLon(lat, lon);
+  return facadeRegion;
+}
+
+export function regionForLatLon(lat, lon) {
+  // Deliberately coarse. The point is not to draw borders, it is that the
+  // building stock of northern Europe does not look like the building stock of
+  // Arizona, and picking by continent-sized box gets most of that.
+  if (lat > 35 && lat < 72 && lon > -11 && lon < 42) {
+    if (lat < 45 && lon > -10 && lon < 30) return 'mediterranean';
+    if (lat > 51 && lon > -11 && lon < 16) return 'northEurope';
+    return 'centralEurope';
+  }
+  if (lat > 14 && lat < 72 && lon > -170 && lon < -52) {
+    // The dry south-west builds in stucco and adobe colours; the rest of North
+    // America in painted siding and brick.
+    if (lat < 38 && lon > -125 && lon < -96) return 'southwest';
+    return 'northAmerica';
+  }
+  if (lat > 18 && lat < 46 && lon > 100 && lon < 146) return 'eastAsia';
+  if (lat < 14 && lat > -56 && lon > -95 && lon < -33) return 'latinAmerica';
+  return 'default';
+}
+
+/**
+ * Regional facade palettes.
+ *
+ * Only about one building in twenty carries `building:colour` and one in
+ * thirty-five a material, so for the overwhelming majority the colour is ours
+ * to choose. It was being chosen from a set that varied in brightness and
+ * almost not at all in hue: 2,600 buildings in Manhattan spanned six degrees
+ * of hue, which is why a city came out as one shade of beige with the lights
+ * turned up and down.
+ *
+ * These are not per-building truth - that is not in the data and cannot be
+ * invented honestly. They are the right *distribution* for a place: Munich is
+ * ochre and cream and pale green, Amsterdam is dark brick, the American suburb
+ * is painted siding, Phoenix is stucco. A street drawn from the right
+ * distribution reads as that city even when no single house is correct.
+ */
+const REGIONAL_PALETTES = {
+  northEurope: {
+    house:      [0x9c5f4a, 0x8a4b3c, 0xb08a6a, 0xd9d2c4, 0x7d5442, 0xc4a882, 0x6f4436],
+    apartments: [0x8f5340, 0xa66b49, 0x9b6b52, 0xc0a488, 0x7a4a3a],
+    generic:    [0x9c5f4a, 0xb08a6a, 0xc9bda8, 0x8a6a52, 0xd2c8b6, 0x7d5442],
+  },
+  centralEurope: {
+    house:      [0xe0cfa8, 0xd8c9a0, 0xc9b68e, 0xe8dcc0, 0xcbb894, 0xdcc8a4],
+    apartments: [0xdcc9a2, 0xc9b68e, 0xe6d8b4, 0xbfae8c, 0xd0bfa0, 0xe2d4bc],
+    generic:    [0xdcc9a2, 0xd2c0a0, 0xc4b294, 0xe6d8b4, 0xcbbfa8, 0xbaa88c],
+  },
+  mediterranean: {
+    house:      [0xeee4d2, 0xe8dcc4, 0xd9c9a8, 0xe4d2b0, 0xcfa882, 0xf0e8da],
+    apartments: [0xe8dcc4, 0xdccbaa, 0xe0cfae, 0xf0e6d4, 0xcfb894],
+    generic:    [0xe8dcc4, 0xe0d0b2, 0xd4c2a2, 0xefe6d6, 0xc9b596],
+  },
+  northAmerica: {
+    house:      [0xdcd6c8, 0xc8cec6, 0xb8c0c4, 0xd8cab4, 0xa9b2a6, 0xe4e0d6, 0x9c8f7e, 0xcdd4d8],
+    apartments: [0xc4bcae, 0xb2aca0, 0xd0c8ba, 0xa89c8c],
+    generic:    [0xc9c2b4, 0xbcc2c0, 0xd2ccbe, 0xaeb4b2, 0xdad3c5, 0xa89c8c],
+  },
+  southwest: {
+    house:      [0xd8be9a, 0xc9a884, 0xe0cba8, 0xb89a76, 0xd2b28c, 0xe8d8bc],
+    apartments: [0xd2b48c, 0xc0a078, 0xdec5a2, 0xb59470],
+    generic:    [0xd2b48c, 0xc8ab86, 0xdcc4a4, 0xbb9c78, 0xe4d2b6],
+  },
+  eastAsia: {
+    house:      [0xd8d4cc, 0xc4c8c8, 0xb0b6ba, 0xe0dcd4, 0xa8aeb2],
+    apartments: [0xc8cccc, 0xb4babc, 0xd4d8d8, 0xa0a8ac],
+    generic:    [0xc8cccc, 0xbcc0c0, 0xd4d8d8, 0xacb2b4],
+  },
+  latinAmerica: {
+    house:      [0xe4d2a8, 0xd8b48c, 0xc9d2c0, 0xe8c8a4, 0xbcc8cc, 0xdcc0b0],
+    apartments: [0xd8c4a0, 0xc8b490, 0xe0d0b0, 0xbcac90],
+    generic:    [0xd8c4a0, 0xcbbca0, 0xe0cfae, 0xbfae94],
+  },
+};
+
 function palettedColour(cls, rng) {
-  const pal = PALETTES[(cls && cls.kind) || 'generic'] || PALETTES.generic;
+  const kind = (cls && cls.kind) || 'generic';
+  const region = REGIONAL_PALETTES[facadeRegion];
+  const pal = (region && (region[kind] || region.generic)) ||
+              PALETTES[kind] || PALETTES.generic;
   if (!rng) return pal[0];
   return pal[Math.floor(rng() * pal.length) % pal.length];
 }
