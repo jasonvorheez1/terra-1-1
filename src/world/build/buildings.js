@@ -60,15 +60,31 @@ function footprintGround(ring, terrainAt) {
  */
 export function reconcileBuildingParts(features) {
   if (!features.buildingParts.length) return;
-  for (const b of features.buildings) b.hasParts = false;
+  for (const b of features.buildings) { b.hasParts = false; b.lowestPart = Infinity; }
   for (const part of features.buildingParts) {
     const c = part.centroid || centroid(part.ring);
     part.centroid = c;
     for (const b of features.buildings) {
       const bb = b.bounds;
       if (c[0] < bb.minX || c[0] > bb.maxX || c[1] < bb.minZ || c[1] > bb.maxZ) continue;
-      if (pointInRing(b.ring, c[0], c[1])) { b.hasParts = true; part.parent = b; break; }
+      if (pointInRing(b.ring, c[0], c[1])) {
+        b.hasParts = true;
+        part.parent = b;
+        b.lowestPart = Math.min(b.lowestPart, part.heights.base);
+        break;
+      }
     }
+  }
+
+  // A part set only supersedes the outline if it actually stands in for it.
+  // Mappers routinely add a part for an upper element alone - a tower, a raised
+  // roof, a lantern - and leave the body of the building to the outline. Taking
+  // the spec literally there deletes the building and leaves its top floating:
+  // way/27909460 in Munich is an 883 m² outline nineteen metres tall whose only
+  // part *starts* at nineteen metres, and it was drawn as a slab in the sky.
+  // If nothing reaches the ground, the outline is still the building.
+  for (const b of features.buildings) {
+    if (b.hasParts && b.lowestPart > 1.5) b.hasParts = false;
   }
 }
 
