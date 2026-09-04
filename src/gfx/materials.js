@@ -43,6 +43,29 @@ export function terrainFamilyForBiome(biomeId) {
   return 'grass';
 }
 
+/**
+ * The two ends of a biome's ground, which NDVI mixes between.
+ *
+ * The satellite already tells us how much is growing at every point on Earth,
+ * and that measurement was only being used to tint one texture - so a parched
+ * hillside and the irrigated valley below it were the same grass in different
+ * colours. Giving the biome a bare end and a living end and letting the
+ * measurement choose between them puts the satellite in charge of what the
+ * ground *is*, not merely what shade it takes.
+ */
+export function terrainBareFamily(biomeId) {
+  if (biomeId === 'desert') return 'sand';
+  if (biomeId === 'polar') return 'snow';
+  if (biomeId === 'tundra' || biomeId === 'alpine') return 'gravel';
+  return 'dirt';
+}
+
+export function terrainLushFamily(biomeId) {
+  if (biomeId === 'polar') return 'snow';
+  if (biomeId === 'desert') return 'dirt';       // an oasis is damp ground, not lawn
+  return 'grass';
+}
+
 export class MaterialLibrary {
   constructor(settings) {
     this.settings = settings;
@@ -140,21 +163,57 @@ export class MaterialLibrary {
    */
   terrain(map = null, biomeId = 'temperateBroadleaf') {
     if (!map) {
-      const family = terrainFamilyForBiome(biomeId);
-      return this.get(`terrain:landscape:${family}`, () => {
+      return this.get(`terrain:landscape:${biomeId}`, () => {
         // Surface textures are shared elsewhere at a different UV scale. Clone
         // the texture object while retaining its canvas so this repeat does not
         // turn a park or footpath into the same 8-metre-scale pattern.
-        const detail = surfaceTexture(family).clone();
-        detail.anisotropy = this.anisotropy();
-        detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
-        detail.repeat.set(32, 32);
-        detail.needsUpdate = true;
-        return new THREE.MeshStandardMaterial({
-          map: detail, vertexColors: true,
-          roughness: family === 'snow' ? 0.78 : 0.97,
+        const clone = (family, repeat) => {
+          const t = surfaceTexture(family).clone();
+          t.anisotropy = this.anisotropy();
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.repeat.set(repeat, repeat);
+          t.needsUpdate = true;
+          return t;
+        };
+        const bareFamily = terrainBareFamily(biomeId);
+        const bare = clone(bareFamily, 32);
+        const lush = clone(terrainLushFamily(biomeId), 32);
+
+        const mat = new THREE.MeshStandardMaterial({
+          map: bare, vertexColors: true,
+          roughness: bareFamily === 'snow' ? 0.78 : 0.97,
           metalness: 0,
         });
+
+        // Two things the stock material cannot do on its own: mix a second
+        // ground by the satellite's vegetation reading, and break up the tiling.
+        // One texture repeated 32 times across a chunk is a visible 8 m grid
+        // from any distance, so each ground is also sampled at a much coarser
+        // scale and the two are averaged - the low frequency hides the seam of
+        // the high one without needing a third texture.
+        mat.onBeforeCompile = (shader) => {
+          shader.uniforms.uLush = { value: lush };
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <common>',
+                     '#include <common>\nattribute float aVeg;\nvarying float vVeg;')
+            .replace('#include <begin_vertex>',
+                     '#include <begin_vertex>\n\tvVeg = aVeg;');
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>',
+                     '#include <common>\nuniform sampler2D uLush;\nvarying float vVeg;')
+            .replace('#include <map_fragment>', `
+#ifdef USE_MAP
+  vec4 bareTex = mix(texture2D(map, vMapUv), texture2D(map, vMapUv * 0.1734), 0.42);
+  vec4 lushTex = mix(texture2D(uLush, vMapUv), texture2D(uLush, vMapUv * 0.2113), 0.42);
+  diffuseColor *= mix(bareTex, lushTex, clamp(vVeg, 0.0, 1.0));
+#endif
+            `);
+          mat.userData.shader = shader;
+        };
+        // Anything that changes the program has to be part of the cache key, or
+        // three will reuse a compiled program from a differently patched clone.
+        mat.customProgramCacheKey = () => `terrain-veg:${biomeId}`;
+        return mat;
       });
     }
     map.anisotropy = this.anisotropy();

@@ -89,6 +89,36 @@ export function buildTerrain(chunk, ctx, opts = {}) {
     return new THREE.Color(biomeGroundColour(ctx.biome, ctx.ndviAt(geo.lat, geo.lon), season));
   });
 
+  // How much is growing, as the satellite measured it, on its own grid.
+  //
+  // The colour above only needs the corners, but the vegetation weight decides
+  // which ground you are standing on, so it is worth a little more shape than a
+  // single gradient across the chunk. MODIS is 250 m data and a chunk is 256 m,
+  // so VEG_GRID square samples is already finer than the source - past that we
+  // would only be interpolating the same pixel more carefully.
+  const VEG_GRID = 5;
+  const veg = new Float32Array(VEG_GRID * VEG_GRID);
+  for (let j = 0; j < VEG_GRID; j++) {
+    for (let i = 0; i < VEG_GRID; i++) {
+      const px = minX + (size * i) / (VEG_GRID - 1);
+      const pz = minZ + (size * j) / (VEG_GRID - 1);
+      const geo = ctx.projection.toGeo(px, pz);
+      // Bare ground reads near zero and dense canopy near one, but the useful
+      // range outdoors sits between; stretch it so the mix uses the whole span
+      // rather than hugging one end.
+      veg[j * VEG_GRID + i] = clamp((ctx.ndviAt(geo.lat, geo.lon) - 0.12) / 0.46, 0, 1);
+    }
+  }
+  const vegAt = (u, v) => {
+    const fx = clamp(u, 0, 1) * (VEG_GRID - 1), fz = clamp(v, 0, 1) * (VEG_GRID - 1);
+    const i0 = Math.min(VEG_GRID - 2, Math.floor(fx)), j0 = Math.min(VEG_GRID - 2, Math.floor(fz));
+    const tx = fx - i0, tz2 = fz - j0;
+    const a = veg[j0 * VEG_GRID + i0], b = veg[j0 * VEG_GRID + i0 + 1];
+    const c = veg[(j0 + 1) * VEG_GRID + i0], d = veg[(j0 + 1) * VEG_GRID + i0 + 1];
+    return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz2;
+  };
+  const vegetation = new Float32Array(n * n);
+
   for (let j = 0; j < n; j++) {
     const tz = j / (n - 1);
     for (let i = 0; i < n; i++) {
@@ -106,6 +136,9 @@ export function buildTerrain(chunk, ctx, opts = {}) {
       uvs[idx * 2 + 1] = 1 - tz;
 
       const tx = i / (n - 1);
+      // A little coherent wander on top of the satellite reading, so the join
+      // between bare and living ground is a ragged edge rather than a gradient.
+      vegetation[idx] = clamp(vegAt(tx, tz) + fbm2(x * 0.021, z * 0.021, 2) * 0.22, 0, 1);
       // Bilinear across the corner colours, then a little coherent variation
       // so the surface is not one even wash. Multiplying in linear space is a
       // good enough stand-in for the old offsetHSL and costs nothing.
@@ -136,6 +169,14 @@ export function buildTerrain(chunk, ctx, opts = {}) {
       normals[idx * 3] = nx / len;
       normals[idx * 3 + 1] = 1 / len;
       normals[idx * 3 + 2] = nz / len;
+
+      // Little grows on a cliff, whatever the satellite averaged over the
+      // quarter kilometre around it. `1 / len` is the cosine of the slope, so
+      // this is free here and would cost a second pass anywhere else.
+      const flatness = 1 / len;
+      if (flatness < 0.94) {
+        vegetation[idx] *= clamp((flatness - 0.55) / 0.39, 0, 1);
+      }
     }
   }
 
@@ -153,6 +194,9 @@ export function buildTerrain(chunk, ctx, opts = {}) {
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  // Read by the terrain material's shader patch to mix bare ground with
+  // living ground; see terrain() in materials.js.
+  geometry.setAttribute('aVeg', new THREE.BufferAttribute(vegetation, 1));
   geometry.setIndex(indices);
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();

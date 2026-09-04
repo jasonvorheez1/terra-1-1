@@ -543,12 +543,21 @@ function overtureTags(properties) {
   return tags;
 }
 
+/** GeoJSON uses [longitude, latitude], unlike Overpass' [latitude, longitude]. */
+function overtureToLocal(projection, coords) {
+  const out = new Array(coords.length);
+  for (let i = 0; i < coords.length; i++) {
+    out[i] = [projection.toLocalX(coords[i][0]), projection.toLocalZ(coords[i][1])];
+  }
+  return out;
+}
+
 function overtureRecordToBuilding(record, projection, minBuildingArea, tol) {
   const p = record.properties || {};
   if (p.is_underground === true || p.is_underground === 'true') return null;
-  const cleaned = cleanRing(toLocal(projection, record.outer || []));
+  const cleaned = cleanRing(overtureToLocal(projection, record.outer || []));
   if (cleaned.length < 3) return null;
-  const rawHoles = (record.holes || []).map((h) => cleanRing(toLocal(projection, h)))
+  const rawHoles = (record.holes || []).map((h) => cleanRing(overtureToLocal(projection, h)))
     .filter((h) => h.length >= 3);
   const a = polygonArea(cleaned, rawHoles);
   if (a < minBuildingArea) return null;
