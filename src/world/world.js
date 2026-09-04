@@ -14,7 +14,7 @@ import { Projection, haversine } from '../geo/projection.js';
 import { elevation } from '../geo/elevation.js';
 import { ndvi, classifyBiome, seasonalPhase } from '../geo/nasa.js';
 import { RegionLoader } from '../geo/overpass.js';
-import { extractFeatures, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, FeatureSet } from './features.js';
+import { extractFeatures, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
 import { buildGradingField } from './build/grading.js';
 import { MultiMesh, clipHalfPlane, colourToLinear } from './build/mesh.js';
 import { buildTerrain, terrainCollision, buildLandcover, buildWater, fetchChunkImagery, biomeGroundColour } from './build/ground.js';
@@ -302,6 +302,9 @@ export class World {
     }
     fs = extractFeatures(region.data, this.projection, { seen: this.seenFeatures });
     reconcileBuildingParts(fs);
+    // Suburbs that were never traced get their houses laid out along the
+    // streets first, so the passes below treat them like any other building.
+    if (this.settings.world.inferHousing) inferSuburbanHousing(fs);
     // What a building is comes first: a footprint recognised as a house gets
     // the house class, and so is no longer a gap for the height pass to fill.
     inferBuildingKinds(fs);

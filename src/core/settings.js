@@ -63,6 +63,7 @@ export const DEFAULTS = {
     weather: 'auto',            // auto | clear | cloudy | overcast | rain | snow | fog
     windSpeed: 3.5,
     useNasaVegetation: true,
+    inferHousing: true,         // invent houses where a suburb is mapped but unbuilt
     interiorsEnabled: true,
     interiorDetail: 'high',
     trafficSigns: true,
@@ -193,6 +194,7 @@ export const SCHEMA = [
       { key: 'weather', label: 'Weather', type: 'select', options: ['auto', 'clear', 'cloudy', 'overcast', 'rain', 'snow', 'fog'] },
       { key: 'windSpeed', label: 'Wind speed', type: 'range', min: 0, max: 18, step: 0.5, unit: ' m/s' },
       { key: 'useNasaVegetation', label: 'NASA vegetation data', type: 'toggle', note: 'Uses MODIS NDVI to plant the world from satellite measurements.' },
+      { key: 'inferHousing', label: 'Fill in unmapped suburbs', type: 'toggle', note: 'Where OpenStreetMap has residential streets but no buildings, lay out plausible houses along them. Invented, not surveyed - turn this off to see only what is actually mapped.' },
       { key: 'interiorsEnabled', label: 'Enterable interiors', type: 'toggle' },
       { key: 'interiorDetail', label: 'Interior detail', type: 'select', options: ['low', 'medium', 'high'] },
       { key: 'showNames', label: 'Show place names', type: 'toggle' },

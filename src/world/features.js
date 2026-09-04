@@ -619,6 +619,196 @@ export function inferBuildingKinds(fs, opts = {}) {
   return changed;
 }
 
+/**
+ * Lay out houses where a suburb is mapped but not built.
+ *
+ * Measured against OpenStreetMap: a square kilometre of central Munich holds
+ * 1,185 buildings and one of Grandview, Missouri holds 23. The streets are
+ * there, the residential land use is there, the houses were never traced -
+ * North American footprints came from bulk imports that were applied region by
+ * region and never finished. Rendering that literally gives you a street grid
+ * across an empty field, which is honest and useless.
+ *
+ * So where a residential polygon contains streets and almost no buildings, the
+ * houses are laid out along the frontages: plots at a typical lot width, set
+ * back from the kerb, squared to the street, both sides. This is invented and
+ * says so - every record is marked `synthetic` - and it never runs where the
+ * mapping is already good, because the test for "unbuilt" is measured per
+ * polygon rather than assumed.
+ *
+ * Deterministic from the road id and the step index, so the same houses appear
+ * every time and neighbouring regions cannot disagree about them.
+ */
+export function inferSuburbanHousing(fs, opts = {}) {
+  const {
+    lotWidth = 21, setback = 9, houseWidth = 12.5, houseDepth = 10.5,
+    maxExistingPerKm2 = 45, minPolygonArea = 12000, clearance = 13,
+  } = opts;
+  if (!fs.roads.length) return 0;
+
+  // Residential land that is essentially unbuilt. Anything better mapped than
+  // this is left exactly as the mappers left it.
+  // Region-level land cover carries no bounds - only the clipped chunk copies
+  // do - so each zone gets its own, once.
+  const zones = [];
+  for (const lc of fs.landcover) {
+    if (lc.spec.cover !== 'urban') continue;
+    if ((lc.tags && lc.tags.landuse) !== 'residential') continue;
+    if (lc.area < minPolygonArea) continue;
+    const bb = lc.bounds || bounds(lc.ring);
+    let inside = 0;
+    for (const b of fs.buildings) {
+      const c = b.centroid;
+      if (c[0] < bb.minX || c[0] > bb.maxX || c[1] < bb.minZ || c[1] > bb.maxZ) continue;
+      if (pointInRing(lc.ring, c[0], c[1])) inside++;
+    }
+    if (inside / (lc.area / 1e6) > maxExistingPerKm2) continue;
+    zones.push({ ring: lc.ring, bb });
+  }
+  if (!zones.length) return 0;
+
+  // Everything already standing, on a grid, so the frontage walk can check
+  // against it cheaply and never build on top of a real footprint.
+  const CELL = 40;
+  const taken = new Map();
+  const mark = (x, z) => {
+    const k = `${Math.floor(x / CELL)},${Math.floor(z / CELL)}`;
+    let l = taken.get(k);
+    if (!l) { l = []; taken.set(k, l); }
+    l.push([x, z]);
+  };
+  const clashes = (x, z, r) => {
+    const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const l = taken.get(`${cx + dx},${cz + dz}`);
+        if (!l) continue;
+        for (const p of l) {
+          if ((p[0] - x) ** 2 + (p[1] - z) ** 2 < r * r) return true;
+        }
+      }
+    }
+    return false;
+  };
+  for (const b of fs.buildings) mark(b.centroid[0], b.centroid[1]);
+
+  // Carriageways, on the same grid. Setting back from the street being walked
+  // is not enough on its own: at a corner, or wherever two streets run close,
+  // the plot lands in the *other* one. Sampled at 6 m, which is finer than any
+  // road is wide.
+  const tarmac = new Map();
+  for (const r of fs.roads) {
+    if (r.spec.tunnel) continue;
+    const half = r.spec.width / 2;
+    const pts = r.rawPts || r.pts;
+    for (let i = 1; i < pts.length; i++) {
+      const ax = pts[i - 1][0], az = pts[i - 1][1];
+      const ex = pts[i][0] - ax, ez = pts[i][1] - az;
+      const len = Math.hypot(ex, ez);
+      const steps = Math.max(1, Math.ceil(len / 6));
+      for (let s = 0; s <= steps; s++) {
+        const x = ax + (ex * s) / steps, z = az + (ez * s) / steps;
+        const k = `${Math.floor(x / CELL)},${Math.floor(z / CELL)}`;
+        let l = tarmac.get(k);
+        if (!l) { l = []; tarmac.set(k, l); }
+        l.push([x, z, half]);
+      }
+    }
+  }
+  const onRoad = (x, z, margin) => {
+    const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const l = tarmac.get(`${cx + dx},${cz + dz}`);
+        if (!l) continue;
+        for (const p of l) {
+          const need = p[2] + margin;
+          if ((p[0] - x) ** 2 + (p[1] - z) ** 2 < need * need) return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const inAZone = (x, z) => {
+    for (const zone of zones) {
+      const bb = zone.bb;
+      if (x < bb.minX || x > bb.maxX || z < bb.minZ || z > bb.maxZ) continue;
+      if (pointInRing(zone.ring, x, z)) return zone;
+    }
+    return null;
+  };
+
+  let made = 0;
+  for (const road of fs.roads) {
+    const spec = road.spec;
+    if (spec.tunnel || spec.bridge || spec.area) continue;
+    if (spec.kind !== 'street' && spec.kind !== 'service') continue;
+    if (spec.highway === 'driveway') continue;
+    const pts = road.rawPts || road.pts;
+    if (!pts || pts.length < 2) continue;
+
+    // Walk the centreline at lot-width intervals.
+    const offset = spec.width / 2 + setback + houseDepth / 2;
+    let carry = 0;
+    let step = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const ax = pts[i - 1][0], az = pts[i - 1][1];
+      const ex = pts[i][0] - ax, ez = pts[i][1] - az;
+      const len = Math.hypot(ex, ez);
+      if (len < 1e-3) continue;
+      const dx = ex / len, dz = ez / len;
+      const nx = -dz, nz = dx;
+      const angle = Math.atan2(dz, dx);
+
+      for (let d = lotWidth - carry; d < len; d += lotWidth, step++) {
+        const px = ax + dx * d, pz = az + dz * d;
+        for (const side of [-1, 1]) {
+          const cx = px + nx * side * offset, cz = pz + nz * side * offset;
+          if (!inAZone(cx, cz)) continue;
+          if (clashes(cx, cz, clearance)) continue;
+          if (onRoad(cx, cz, houseDepth * 0.55)) continue;
+
+          // Jitter the plot a little so the street is not a barracks.
+          const rng = featureRng('sub', `${road.id}:${step}:${side}`);
+          const jw = houseWidth * rng.range(0.86, 1.14);
+          const jd = houseDepth * rng.range(0.86, 1.14);
+          const ja = angle + rng.range(-0.04, 0.04);
+          const back = rng.range(-1.6, 1.6);
+          const ox = cx + nx * side * back, oz = cz + nz * side * back;
+
+          const ca = Math.cos(ja), sa = Math.sin(ja);
+          const ring = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [
+            ox + (u * jw / 2) * ca - (v * jd / 2) * sa,
+            oz + (u * jw / 2) * sa + (v * jd / 2) * ca,
+          ]);
+
+          const tags = { building: 'house' };
+          const heights = buildingHeights(tags, jw * jd, rng);
+          fs.buildings.push({
+            id: `syn/${road.id}/${step}/${side}`,
+            source: `synthetic/${road.id}/${step}/${side}`,
+            ring, holes: [], area: jw * jd, tags, heights,
+            facade: facadeSpec(tags, heights.cls, rng),
+            name: null,
+            centroid: [ox, oz],
+            bounds: bounds(ring),
+            isPart: false,
+            levels: heights.levels,
+            kind: heights.cls.kind,
+            era: buildingEra(tags),
+            synthetic: true,
+          });
+          mark(ox, oz);
+          made++;
+        }
+      }
+      carry = (carry + len) % lotWidth;
+    }
+  }
+  return made;
+}
+
 export function inferMissingHeights(fs, opts = {}) {
   const { radius = 90, minSamples = 3, maxSamples = 12 } = opts;
   const known = [];
