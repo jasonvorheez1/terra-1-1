@@ -171,3 +171,107 @@ export class OvertureBuildingsClient {
 }
 
 export const overtureBuildings = new OvertureBuildingsClient();
+
+// --- transportation --------------------------------------------------------
+
+export const OVERTURE_TRANSPORT_URL =
+  `https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/${OVERTURE_RELEASE}/transportation.pmtiles`;
+export const OVERTURE_SEGMENT_ZOOM = 14;
+
+function linesOf(geometry) {
+  if (!geometry) return [];
+  if (geometry.type === 'LineString') return [geometry.coordinates];
+  if (geometry.type === 'MultiLineString') return geometry.coordinates;
+  return [];
+}
+
+/**
+ * Decode the segment layer of one MVT tile into WGS84 polyline records.
+ *
+ * Overture's `class` is OSM's `highway` value by another name - residential,
+ * service, footway, secondary, steps all appear verbatim - so a segment can be
+ * handed to the existing tag interpreter with a synthesised tag set rather than
+ * needing a second road pipeline.
+ */
+export function decodeSegmentTile(data, x, y, z) {
+  if (!data || !data.byteLength) return [];
+  const tile = new VectorTile(new PbfReader(new Uint8Array(data)));
+  const layer = tile.layers.segment;
+  if (!layer) return [];
+
+  const out = [];
+  for (let i = 0; i < layer.length; i++) {
+    const feature = layer.feature(i);
+    if (feature.type !== 2) continue;                 // LineString only
+    const props = feature.properties || {};
+    if (props.subtype && props.subtype !== 'road') continue;   // rail and water are drawn elsewhere
+    if (!props.class) continue;
+    const geo = feature.toGeoJSON(x, y, z);
+    const baseId = props.id || `tile-${z}-${x}-${y}-${feature.id ?? i}`;
+    const lines = linesOf(geo.geometry);
+    for (let p = 0; p < lines.length; p++) {
+      const coords = lines[p];
+      if (!coords || coords.length < 2) continue;
+      out.push({
+        id: lines.length > 1 ? `${baseId}#${p}` : String(baseId),
+        coords,
+        properties: props,
+        bbox: coordinateBounds(coords),
+      });
+    }
+  }
+  return out;
+}
+
+/** Same tile machinery as the buildings client, over the transportation theme. */
+export class OvertureSegmentsClient {
+  constructor({ url = OVERTURE_TRANSPORT_URL, zoom = OVERTURE_SEGMENT_ZOOM } = {}) {
+    this.url = url;
+    this.zoom = zoom;
+    this.archive = new PMTiles(new CachedRangeSource(url));
+    this.tiles = new Map();
+    this.maxTiles = 72;
+  }
+
+  tile(z, x, y) {
+    const key = `${z}/${x}/${y}`;
+    let pending = this.tiles.get(key);
+    if (pending) {
+      this.tiles.delete(key);
+      this.tiles.set(key, pending);
+      return pending;
+    }
+    pending = this.archive.getZxy(z, x, y)
+      .then((result) => decodeSegmentTile(result && result.data, x, y, z))
+      .catch((error) => { this.tiles.delete(key); throw error; });
+    this.tiles.set(key, pending);
+    while (this.tiles.size > this.maxTiles) this.tiles.delete(this.tiles.keys().next().value);
+    return pending;
+  }
+
+  async fetchSegments(bbox, { signal = null } = {}) {
+    if (signal && signal.aborted) throw new Error('aborted');
+    const tiles = tilesForBBox(bbox, this.zoom);
+    const settled = await Promise.allSettled(tiles.map((t) => this.tile(t.z, t.x, t.y)));
+    if (signal && signal.aborted) throw new Error('aborted');
+
+    const failures = settled.filter((r) => r.status === 'rejected');
+    const successes = settled.filter((r) => r.status === 'fulfilled');
+    if (!successes.length && failures.length) throw failures[0].reason;
+
+    // A segment crossing a tile seam appears in both, clipped. Keeping the
+    // longest copy per id is the line equivalent of the buildings' largest-area
+    // rule, and stops a street being drawn twice with a join in the middle.
+    const byId = new Map();
+    for (const result of successes) {
+      for (const rec of result.value) {
+        if (!intersects(rec.bbox, bbox)) continue;
+        const old = byId.get(rec.id);
+        if (!old || rec.coords.length > old.coords.length) byId.set(rec.id, rec);
+      }
+    }
+    return [...byId.values()];
+  }
+}
+
+export const overtureSegments = new OvertureSegmentsClient();

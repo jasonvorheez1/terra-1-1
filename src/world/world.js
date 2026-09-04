@@ -14,7 +14,7 @@ import { Projection, haversine } from '../geo/projection.js';
 import { elevation } from '../geo/elevation.js';
 import { ndvi, classifyBiome, seasonalPhase } from '../geo/nasa.js';
 import { RegionLoader } from '../geo/overpass.js';
-import { extractFeatures, mergeOvertureBuildings, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
+import { extractFeatures, mergeOvertureBuildings, mergeOvertureRoads, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
 import { buildGradingField } from './build/grading.js';
 import { MultiMesh, clipHalfPlane, colourToLinear } from './build/mesh.js';
 import { buildTerrain, terrainCollision, buildLandcover, buildWater, fetchChunkImagery, biomeGroundColour } from './build/ground.js';
@@ -215,9 +215,18 @@ export class World {
     } finally {
       clearInterval(tick);
     }
-    if (centre.failed) {
-      throw new Error('No Overpass mirror answered. The map servers may be down; try again shortly.');
+    // Overpass failing is not the same as having no map. Overture's tiles are
+    // fetched alongside it and settle independently, so if they arrived there
+    // is a world to walk in - buildings, and streets from the transportation
+    // theme - and the session should start rather than bouncing the player
+    // back to the menu because one busy mirror timed out. Only refuse when
+    // nothing at all answered.
+    const overtureRescued = centre.overtureBuildings.length > 0 ||
+                            centre.overtureSegments.length > 0;
+    if (centre.failed && !overtureRescued) {
+      throw new Error('No map data answered. Both OpenStreetMap and the Overture tiles are unreachable; try again shortly.');
     }
+    if (centre.failed) this.osmDegraded = true;
     if (onProgress) onProgress(0.62, 'Building the world');
 
     this.rebuildGrading();
@@ -318,6 +327,13 @@ export class World {
       this.projection,
       { seen: this.seenFeatures },
     );
+    // Streets from Overture only where Overpass gave us none. With both in
+    // hand OSM is the better map and the two cannot be deduped reliably, so
+    // this is a fallback rather than a supplement - see mergeOvertureRoads.
+    if (region.failed && !fs.roads.length) {
+      fs.__overtureRoads = mergeOvertureRoads(
+        fs, region.overtureSegments, this.projection, { seen: this.seenFeatures });
+    }
     reconcileBuildingParts(fs);
     // Only after both real footprint sources have been exhausted do mapped-but
     // unbuilt residential zones receive clearly marked synthetic houses.
@@ -683,10 +699,18 @@ export class World {
       chunk.awaiting.add(this.regions.keyFor(chunk.centreX, chunk.centreZ));
     }
     for (const region of overlapping) {
-      // `failed` counts as not-yet-arrived: the chunk is built without it now,
-      // and rebuilt if a retry brings the data in.
-      if (region.structureReady && !(region.failed && !region.spent)) this.featuresFor(region);
-      else chunk.awaiting.add(region.key);
+      if (!region.structureReady) { chunk.awaiting.add(region.key); continue; }
+      const osmMissing = region.failed && !region.spent;
+      // A failed Overpass query does not mean an empty region. Overture is
+      // fetched alongside it and settles independently, so when the OSM half
+      // times out the footprints are usually already in hand - and refusing to
+      // look at them left a district of houses unbuilt because a mirror was
+      // busy. Build with whatever arrived.
+      const haveOverture = region.overtureReady && region.overtureBuildings.length > 0;
+      if (!osmMissing || haveOverture) this.featuresFor(region);
+      // Still waiting on OSM either way: the streets, the land cover and the
+      // tag detail only come from there, so the chunk is rebuilt when it lands.
+      if (osmMissing) chunk.awaiting.add(region.key);
     }
 
     const t0 = performance.now();

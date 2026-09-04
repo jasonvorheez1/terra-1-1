@@ -665,6 +665,79 @@ function enrichOsmBuilding(building, record) {
  *   3. non-OSM footprints matching a newly-added live OSM shape are dropped;
  *   4. only the remaining real footprints fill gaps in OSM coverage.
  */
+/**
+ * Add streets from Overture's transportation theme.
+ *
+ * Used only where the Overpass half of a region failed. Roads are not deduped
+ * against OSM the way buildings are - buildings carry a GERS id that names the
+ * OSM feature they came from, and a street has no equally exact handle - so
+ * running both sources at once risks drawing every road twice, slightly
+ * offset. Restricting this to regions with no OSM at all sidesteps that
+ * entirely and is what the fallback is for: not a better map, a map at all.
+ *
+ * Overture's `class` is OSM's `highway` value by another name, so each segment
+ * is given a synthesised tag set and passed through the same roadSpec every
+ * OSM way goes through. Everything downstream - widths, kerbs, markings,
+ * grading, the spawn search - then works unchanged.
+ */
+export function mergeOvertureRoads(fs, records, projection, opts = {}) {
+  const { seen = new Set(), maxRoadSegment = 14, simplifyTolerance = 0.25 } = opts;
+  let added = 0;
+  if (!records || !records.length) return added;
+
+  for (const record of records) {
+    const source = `overture-seg/${record.id}`;
+    if (seen.has(source)) continue;
+
+    const props = record.properties || {};
+    const tags = { highway: props.class };
+    // `names` arrives as a JSON object on the tile; the primary is the one a
+    // street sign would carry.
+    const names = typeof props.names === 'string' ? safeJson(props.names) : props.names;
+    if (names && names.primary) tags.name = names.primary;
+    else if (props['@name']) tags.name = props['@name'];
+    if (typeof props.road_surface === 'string' && !props.road_surface.startsWith('[')) {
+      tags.surface = props.road_surface;
+    }
+
+    const spec = roadSpec(tags);
+    if (!spec.cls) continue;
+
+    const pts = [];
+    for (const c of record.coords) {
+      pts.push([projection.toLocalX(c[1]), projection.toLocalZ(c[0])]);
+    }
+    const line = simplify(pts, simplifyTolerance * 0.6, false);
+    if (line.length < 2 || polylineLength(line) < 0.7) continue;
+
+    seen.add(source);
+    fs.roads.push({
+      id: record.id,
+      source,
+      pts: resample(line, maxRoadSegment),
+      rawPts: line,
+      spec,
+      tags,
+      closed: false,
+      // No connector graph is read, so every end is treated as meeting the
+      // street. That is the safe assumption: it ramps a bridge down rather
+      // than leaving it ending in mid-air.
+      startRef: null,
+      endRef: null,
+      startJunction: false,
+      endJunction: false,
+      endsAtGrade: [true, true],
+      overture: true,
+    });
+    added++;
+  }
+  return added;
+}
+
+function safeJson(s) {
+  try { return JSON.parse(s); } catch (e) { return null; }
+}
+
 export function mergeOvertureBuildings(fs, records, projection, opts = {}) {
   const { seen = new Set(), minBuildingArea = 6, simplifyTolerance = 0.25 } = opts;
   const stats = { added: 0, enriched: 0, duplicates: 0, osmGeometry: 0, invalid: 0 };

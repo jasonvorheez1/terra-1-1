@@ -18,7 +18,7 @@
 
 import { fetchCached } from './net.js';
 import { padBBox } from './projection.js';
-import { overtureBuildings } from './overture.js';
+import { overtureBuildings, overtureSegments } from './overture.js';
 
 // Every endpoint in this list must mirror the whole planet. Regional Overpass
 // instances return a valid empty response outside their extract, which is
@@ -315,6 +315,7 @@ export class Region {
     this.data = new OsmData();
     this.data.bbox = bbox;
     this.overtureBuildings = [];
+    this.overtureSegments = [];
     this.overtureReady = false;
     this.overtureError = null;
     this.structureReady = false;
@@ -404,7 +405,16 @@ export class RegionLoader {
       const overturePending = this.useOvertureBuildings
         ? overtureBuildings.fetchBuildings(bbox, { signal: region.abort.signal })
         : Promise.resolve([]);
-      const [osmResult, overtureResult] = await Promise.allSettled([osmPending, overturePending]);
+      // Streets too, so a region whose Overpass query dies is not just a field
+      // of houses with no way between them. Fetched unconditionally rather
+      // than on failure, because by the time we know OSM has failed we would
+      // be starting this from cold and the player is already standing there.
+      const segmentPending = this.useOvertureBuildings
+        ? overtureSegments.fetchSegments(bbox, { signal: region.abort.signal })
+        : Promise.resolve([]);
+      const [osmResult, overtureResult, segmentResult] =
+        await Promise.allSettled([osmPending, overturePending, segmentPending]);
+      if (segmentResult.status === 'fulfilled') region.overtureSegments = segmentResult.value;
 
       if (osmResult.status === 'fulfilled') {
         region.data.ingest(osmResult.value).indexJunctions();
