@@ -16,7 +16,7 @@
 //     small falls.
 
 import * as THREE from 'three';
-import { clamp, damp } from '../core/util.js';
+import { clamp, damp, lerp } from '../core/util.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -48,6 +48,11 @@ export class CharacterController {
     this.gravity = -19.6;          // heavier than reality; games always are
     this.jumpSpeed = 5.0;
     this.airControl = 0.32;
+    // How quickly horizontal velocity chases what you asked for. See the
+    // note at the damp() call: these are the difference between walking
+    // and dragging a cursor.
+    this.accelRate = 9.5;          // ~0.25 s to nine tenths of pace
+    this.brakeRate = 15;           // planting a foot is faster than starting
     this.maxSlope = Math.cos(52 * Math.PI / 180);
     this.stepHeight = 0.42;
 
@@ -67,6 +72,7 @@ export class CharacterController {
     this._temp = new THREE.Vector3();
     this._nearby = [];
     this._hitNormalSum = new THREE.Vector3();
+    this._stepStart = new THREE.Vector3();
     this._contacts = 0;
   }
 
@@ -188,13 +194,44 @@ export class CharacterController {
     // and a quarter turn later it is A and D.
     const wishX = moveInput.x * cos - moveInput.y * sin;
     const wishZ = -(moveInput.x * sin + moveInput.y * cos);
-    let targetVx = wishX * speed;
-    let targetVz = wishZ * speed;
+
+    // Nobody walks backwards as fast as forwards, or sideways as fast as
+    // either. Scaling by the direction of intent rather than clamping the
+    // result keeps the diagonals honest: full speed forward, a little less
+    // across, and a definite crab backwards.
+    let dirScale = 1;
+    const inputLen = Math.hypot(moveInput.x, moveInput.y);
+    if (inputLen > 0.001) {
+      const fwd = moveInput.y / inputLen;             // 1 ahead, -1 behind
+      const side = Math.abs(moveInput.x) / inputLen;
+      dirScale = fwd >= 0 ? lerp(1, 0.82, side) : lerp(0.62, 0.82, side);
+    }
+
+    // Uphill costs you; downhill does not pay you back much. The ground normal
+    // is already resolved from the last frame's contact, so this is free.
+    let slopeScale = 1;
+    if (this.grounded && inputLen > 0.001) {
+      const gn = this.groundNormal;
+      // Gradient points downhill in the horizontal plane; walking against it is
+      // walking up. Flat ground has no horizontal component and no effect.
+      const grade = -(wishX * gn.x + wishZ * gn.z) / Math.max(inputLen, 0.001);
+      slopeScale = clamp(1 - Math.max(0, grade) * 1.35, 0.45, 1.06);
+    }
+
+    const wanted = speed * dirScale * slopeScale;
+    let targetVx = wishX * wanted;
+    let targetVz = wishZ * wanted;
 
     if (this.inWater) { targetVx *= 0.55; targetVz *= 0.55; }
 
-    // Ground has grip; air does not.
-    const accel = this.grounded ? 42 : 42 * this.airControl;
+    // A person has mass. Reaching ninety per cent of walking pace used to take
+    // four frames and stopping from a run took six, which is not walking - it
+    // is a cursor being dragged, and it is most of why movement felt wrong.
+    // Braking is quicker than accelerating, because it is: you can plant a foot
+    // faster than you can build momentum. Air keeps almost none of either.
+    const speedingUp = Math.hypot(targetVx, targetVz) >= Math.hypot(this.velocity.x, this.velocity.z);
+    const ground = speedingUp ? this.accelRate : this.brakeRate;
+    const accel = this.grounded ? ground : ground * this.airControl;
     this.velocity.x = damp(this.velocity.x, targetVx, accel, dt);
     this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
 
@@ -220,6 +257,7 @@ export class CharacterController {
     const sub = 1 / steps;
 
     this.grounded = false;
+    this._stepStart.copy(this.position);
     let normalAccum = new THREE.Vector3();
     for (let s = 0; s < steps; s++) {
       this._before.copy(this.position);
@@ -247,9 +285,21 @@ export class CharacterController {
 
     // --- step up -----------------------------------------------------------
     // If we wanted to move horizontally and barely did, try again from higher.
-    const wantedH = Math.hypot(targetVx, targetVz) * dt * 0.5;
-    const gotH = Math.hypot(this.position.x - (this.position.x - move.x), 0);
-    if ((this.grounded || this.wasGrounded) && wantedH > 0.001) {
+    // The test is whether the move was actually obstructed, which means
+    // comparing where we meant to get to with where we ended up. The old
+    // version computed `gotH` as hypot(move.x, 0) - an expression that just
+    // recovers move.x, says nothing about what was achieved, and was then never
+    // read - so this fired on every walking frame instead of on blocked ones.
+    // `wanted` has to be the *intended* velocity, not the integrated move: a
+    // wall strips the velocity pushing into it, so by the time we get here a
+    // blocked frame has almost no move left to measure. Testing the move
+    // against itself is why the original never gated on anything - and testing
+    // it against intent, as an earlier attempt at this did, gated it shut
+    // permanently, because being blocked is exactly the state that empties it.
+    const wantedH = Math.hypot(targetVx, targetVz) * dt;
+    const gotH = Math.hypot(this.position.x - this._stepStart.x,
+                            this.position.z - this._stepStart.z);
+    if ((this.grounded || this.wasGrounded) && wantedH > 0.001 && gotH < wantedH * 0.6) {
       this.tryStepUp(moveInput, speed, dt);
     }
 
