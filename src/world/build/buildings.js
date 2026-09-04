@@ -37,9 +37,9 @@ const PARAPET_HEIGHT = 0.75;
 /**
  * Ground height for a footprint.
  *
- * Uses the lowest sample around the ring so the building is bedded into a
- * slope rather than floating off the downhill side, and reports the highest so
- * callers know how far the plinth has to reach.
+ * The highest sample is where the building is bedded - a floor sits at the top
+ * of its grade, not under it - and the lowest is how far the plinth has to
+ * reach to close the gap on the downhill side.
  */
 function footprintGround(ring, terrainAt) {
   let min = Infinity, max = -Infinity, sum = 0, n = 0;
@@ -130,7 +130,9 @@ function addPartedEntrance(b, ctx, multi, collide) {
   if (!b.door) return;
   try {
     const g = footprintGround(ensureClockwise(b.ring), ctx.terrainAt);
-    const baseY = g.min + b.heights.base - (b.heights.base > 0 ? 0 : 0.35);
+    // Same bedding rule as buildOne, or the door sits at a different height
+    // from the parts it belongs to.
+    const baseY = g.max + b.heights.base - (b.heights.base > 0 ? 0 : 0.05);
     const acc = multi.for('solid', ctx.materials.solid({ roughness: 0.85 }));
     addDoorway(b.door, acc, collide, baseY, colourToLinear(b.facade.colour), b,
                featureRng('arch', b.id));
@@ -176,17 +178,54 @@ function addCanopyColumns(ring, acc, baseY, topY, colour, collide, spacing = 9) 
   }
 }
 
+/**
+ * A foundation band under the walls, from the floor down past the lowest
+ * ground the footprint touches.
+ *
+ * Drawn as one skirt rather than following the terrain per-vertex: the point
+ * is to close the gap under a level building on sloping ground, and a straight
+ * band buried at its bottom edge does that while staying two triangles an edge.
+ */
+function addPlinth(ring, acc, topY, bottomY, colour, collide) {
+  const n = ring.length;
+  const dark = shade(colour, 0.88);
+  for (let i = 0; i < n; i++) {
+    // Walls run anticlockwise so their faces point outdoors; match that here.
+    const a = ring[(i + 1) % n], c = ring[i];
+    acc.addQuad([a[0], bottomY, a[1]], [c[0], bottomY, c[1]],
+                [c[0], topY, c[1]], [a[0], topY, a[1]],
+                [0, 0, 1, Math.max(0.2, (topY - bottomY) * 0.35)], dark);
+  }
+  // Solid too, or you can walk in under the floor where the ground has fallen
+  // away. `wall` wants a per-point height offset; the plinth is level, so zero.
+  if (collide) {
+    const closed = ring.concat([ring[0]]);
+    collide.wall(closed, new Float32Array(closed.length), bottomY, topY - bottomY);
+  }
+}
+
 function buildOne(b, ctx, multi, detail, collide) {
   const ring = ensureClockwise(b.ring);
   const holes = (b.holes || []).map(ensureClockwise);
   const g = footprintGround(ring, ctx.terrainAt);
   const h = b.heights;
 
-  // Sink the base slightly below the lowest ground sample so no gap can open
-  // between wall and terrain on a slope.
-  const baseY = g.min + h.base - (h.base > 0 ? 0 : 0.35);
-  const wallTopY = g.min + h.wallTop;
-  const topY = g.min + h.top;
+  // Bed the building at the *highest* ground under its footprint, not the
+  // lowest.
+  //
+  // Sinking it to the lowest corner guarantees no gap opens downhill, which is
+  // why it was done, but it buries the building by the full fall across the
+  // plot: measured over Grandview, 97 of 142 houses had more than a metre of
+  // earth up their walls and the worst had 3.6 m against a 3.3 m wall - the
+  // whole storey underground. A real building does not have soil pressing on
+  // its ground floor. It sits level at the top of the grade and shows a
+  // foundation on the downhill side, which is what addPlinth draws.
+  const ref = g.max;
+  const baseY = ref + h.base - (h.base > 0 ? 0 : 0.05);
+  const wallTopY = ref + h.wallTop;
+  const topY = ref + h.top;
+  // How far the ground falls away beneath the floor, for the foundation.
+  const plinthDrop = baseY - (g.min - 0.35);
   const wallHeight = wallTopY - baseY;
   if (wallHeight <= 0.05) return;
 
@@ -210,6 +249,16 @@ function buildOne(b, ctx, multi, detail, collide) {
   // you cannot enter or see past, and the Strip is built out of them: 118 in
   // this square kilometre of Las Vegas, the largest 8,100 m² at three metres
   // tall, which walled in is a low windowless warehouse over the forecourt.
+  // The foundation. Now that the floor sits at the top of the grade, the
+  // ground falls away from it downhill, and something has to close that gap or
+  // you can see under the building. A plinth is what a real house does about
+  // exactly this problem, so it is drawn as one: a plain band a shade darker
+  // than the wall, following the ground down to below the lowest corner.
+  if (plinthDrop > 0.12 && b.kind !== 'canopy') {
+    addPlinth(ring, multi.for('solid', ctx.materials.solid({ roughness: 0.9 })),
+              baseY, g.min - 0.35, shade(colour, 0.72), collide);
+  }
+
   if (b.kind === 'canopy') {
     addCanopyColumns(ring, multi.for('solid', ctx.materials.solid({ roughness: 0.85 })),
                      baseY, wallTopY, colour, collide);
