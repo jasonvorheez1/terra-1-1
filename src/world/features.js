@@ -29,7 +29,7 @@ import {
 import {
   area, centroid, cleanRing, simplify, assembleRings, classifyRings, bounds,
   polygonArea, polylineLength, resample, orientedBounds, pointInRing,
-  pointInPolygon,
+  pointInPolygon, distanceToRing,
 } from './geometry.js';
 import { clamp, lerp, smoothstep } from '../core/util.js';
 
@@ -450,6 +450,20 @@ function addArea(fs, tags, ring, holes, source, id, tol, minBuildingArea) {
   const a = area(cleaned);
   if (a < 0.5) return;
 
+  // A restaurant can be mapped as the whole building/area rather than as a
+  // node. Preserve a centroid POI as well as the footprint so the storefront
+  // identity pass treats both OSM mapping styles the same way.
+  if (tags.name && isRestaurantTags(tags)) {
+    const c = centroid(cleaned);
+    fs.pois.push({
+      id: `area/${source}`,
+      source,
+      x: c[0], z: c[1], name: tags.name,
+      category: tags.amenity,
+      tags,
+    });
+  }
+
   if (tags.building || tags['building:part']) {
     if (a < minBuildingArea) return;
     const simplified = simplify(cleaned, Math.min(tol, 0.25), true);
@@ -848,6 +862,105 @@ function classifyProp(tags) {
   if (tags.tourism === 'information') return 'info_board';
   if (tags.historic === 'memorial' || tags.historic === 'monument') return 'monument';
   return null;
+}
+
+// --- named restaurant storefronts -----------------------------------------
+
+const RESTAURANT_AMENITIES = new Set([
+  'restaurant', 'cafe', 'fast_food', 'food_court', 'ice_cream', 'bar', 'pub',
+]);
+
+export function isRestaurantTags(tags) {
+  return !!(tags && RESTAURANT_AMENITIES.has(tags.amenity));
+}
+
+/** Turn OSM's restaurant tags into the compact description the renderer uses. */
+export function restaurantFromTags(tags, id = null) {
+  if (!isRestaurantTags(tags)) return null;
+  const name = tags.name || tags.brand || tags.operator || null;
+  const cuisines = String(tags.cuisine || '')
+    .split(/[;,]/).map((v) => v.trim().toLowerCase()).filter(Boolean);
+  return {
+    id,
+    name,
+    brand: tags.brand || null,
+    category: tags.amenity,
+    cuisines,
+    colour: parseColour(tags['brand:colour'] || tags['brand:color'] || tags.colour || tags.color),
+    takeaway: tags.takeaway || null,
+    driveThrough: isTruthy(tags.drive_through),
+    outdoorSeating: isTruthy(tags.outdoor_seating),
+    openingHours: tags.opening_hours || null,
+    website: tags.website || tags['contact:website'] || null,
+    wikidata: tags['brand:wikidata'] || tags.wikidata || null,
+    image: tags.wikimedia_commons || tags.image || null,
+    mapillary: tags.mapillary || null,
+    tags,
+  };
+}
+
+/**
+ * Attach each restaurant POI to the footprint which actually contains it.
+ * This is what lets an Overture gap-fill footprint receive identity from a
+ * live OSM node. A short nearest-wall fallback covers entrance nodes placed a
+ * metre outside the outline; anything across the street is deliberately too
+ * far away to guess.
+ */
+export function assignRestaurantBusinesses(fs, opts = {}) {
+  const { maxOutsideDistance = 12 } = opts;
+  for (const b of fs.buildings) {
+    b.restaurants = [];
+    b.restaurant = null;
+    if (isRestaurantTags(b.tags)) {
+      const own = restaurantFromTags(b.tags, `building/${b.source}`);
+      if (own) b.restaurants.push({ ...own, mappedOnBuilding: true });
+    }
+  }
+
+  for (const poi of fs.pois) {
+    const restaurant = restaurantFromTags(poi.tags, poi.id);
+    if (!restaurant) continue;
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const b of fs.buildings) {
+      const bb = b.bounds;
+      if (poi.x < bb.minX - maxOutsideDistance || poi.x > bb.maxX + maxOutsideDistance ||
+          poi.z < bb.minZ - maxOutsideDistance || poi.z > bb.maxZ + maxOutsideDistance) continue;
+
+      const inside = pointInPolygon(b.ring, b.holes, poi.x, poi.z);
+      const distance = inside ? 0 : distanceToRing(b.ring, poi.x, poi.z);
+      if (!inside && distance > maxOutsideDistance) continue;
+      // When footprints nest, the smallest containing one is normally the
+      // shop unit rather than its parent block. Outside points prefer the
+      // nearest wall and use area only as a tie-breaker.
+      const score = inside ? b.area * 1e-5 : 1000 + distance + b.area * 1e-7;
+      if (score < bestScore) { bestScore = score; best = b; }
+    }
+    if (!best) continue;
+
+    const identity = `${restaurant.name || ''}|${restaurant.category}|${restaurant.id || ''}`.toLowerCase();
+    const already = best.restaurants.some((r) =>
+      `${r.name || ''}|${r.category}|${r.id || ''}`.toLowerCase() === identity ||
+      (restaurant.name && r.name && restaurant.name.toLowerCase() === r.name.toLowerCase()));
+    if (!already) best.restaurants.push(restaurant);
+  }
+
+  let assigned = 0;
+  for (const b of fs.buildings) {
+    if (!b.restaurants.length) continue;
+    b.restaurants.sort((a, c) => {
+      if (!!a.mappedOnBuilding !== !!c.mappedOnBuilding) return a.mappedOnBuilding ? -1 : 1;
+      if (!!a.name !== !!c.name) return a.name ? -1 : 1;
+      if (a.category === 'restaurant' && c.category !== 'restaurant') return -1;
+      if (c.category === 'restaurant' && a.category !== 'restaurant') return 1;
+      return String(a.name || '').localeCompare(String(c.name || ''));
+    });
+    b.restaurant = b.restaurants[0];
+    b.groundUse = 'restaurant';
+    assigned++;
+  }
+  return assigned;
 }
 
 // --- height inference ------------------------------------------------------

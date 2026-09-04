@@ -16,6 +16,8 @@ import { colourToLinear, shade } from './mesh.js';
 import { box, cylinder } from './props.js';
 import { insetRing, offsetRing, orientedBounds, centroid, perimeter, simplify } from '../geometry.js';
 import { clamp, lerp } from '../../core/util.js';
+import { signGlyphUv } from '../../gfx/textures.js';
+import { restaurantSignLabel, restaurantPalette } from '../restaurants.js';
 
 /**
  * Add the detail appropriate to a building's type.
@@ -24,7 +26,7 @@ import { clamp, lerp } from '../../core/util.js';
  * builder. Only things a person could stand on or walk into are collided;
  * a cornice 12 metres up is decoration.
  */
-export function addArchitecture(b, ring, ctx, acc, collide, geom, rng) {
+export function addArchitecture(b, ring, ctx, acc, collide, geom, rng, multi = null) {
   const { baseY, wallTopY, topY, colour } = geom;
   const kind = b.kind;
   const levels = b.levels;
@@ -58,6 +60,13 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng) {
     addDoorway(door, acc, collide, baseY, colour, b, rng);
   }
 
+  // Business identity is independent of the shell type. A restaurant in the
+  // ground floor of an apartment block should keep the apartments above while
+  // still reading unmistakably as that named restaurant from the pavement.
+  if (b.restaurant && door && multi) {
+    addRestaurantStorefront(b, door, ctx, multi, acc, baseY, rng);
+  }
+
   switch (kind) {
     case 'house':
       addEaves(outline, acc, wallTopY, 0.32, colour);
@@ -75,7 +84,7 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng) {
     case 'retail':
       // The three things that make a shop read as a shop from across a street.
       addFascia(outline, acc, baseY, colour, b);
-      addAwning(outline, acc, baseY, rng);
+      if (!b.restaurant) addAwning(outline, acc, baseY, rng);
       if (flatRoof) addParapetPlant(outline, acc, wallTopY, rng, 0.4);
       break;
 
@@ -149,6 +158,70 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng) {
       // only where they will actually be seen.
       if (levels >= 3 && footprint > 60) addEaves(outline, acc, wallTopY, 0.22, colour);
       break;
+  }
+}
+
+/** Named sign, cuisine-coloured awning and optional menu board at the entrance. */
+function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
+  const restaurant = b.restaurant;
+  const label = restaurantSignLabel(restaurant);
+  const palette = restaurantPalette(restaurant, rng);
+  const panel = colourToLinear(palette.panel);
+  const accent = colourToLinear(palette.accent);
+  const white = colourToLinear(0xffffff);
+  const nx = door.nx, nz = door.nz;
+  const ax = -nz, az = nx;
+  const angle = Math.atan2(nz, nx);
+
+  const available = clamp((door.edgeLength || 7) - 0.45, 2.2, 10.5);
+  const charAspect = 0.62;
+  const signH = clamp(available / Math.max(4, label.length * charAspect), 0.46, 0.82);
+  const charW = signH * charAspect;
+  const signW = Math.min(available, label.length * charW + 0.36);
+  const centreY = baseY + 3.64;
+  const boardDepth = 0.16;
+  box(solid, door.x + nx * boardDepth / 2, centreY, door.z + nz * boardDepth / 2,
+      boardDepth, signH + 0.22, signW, panel, angle);
+
+  const textAcc = multi.for('restaurant-sign-text', ctx.materials.restaurantSignText());
+  const textY0 = centreY - signH * 0.46;
+  const textY1 = centreY + signH * 0.46;
+  const textDepth = boardDepth + 0.018;
+  const start = -(label.length * charW) / 2 + charW / 2;
+  for (let i = 0; i < label.length; i++) {
+    if (label[i] === ' ') continue;
+    const t = start + i * charW;
+    const left = t - charW * 0.48, right = t + charW * 0.48;
+    const [u0, v0, u1, v1] = signGlyphUv(label[i]);
+    // Right-to-left vertex order makes the geometric normal face along the
+    // stored outward facade normal rather than back into the wall.
+    textAcc.addQuad(
+      [door.x + nx * textDepth + ax * right, textY0, door.z + nz * textDepth + az * right],
+      [door.x + nx * textDepth + ax * left, textY0, door.z + nz * textDepth + az * left],
+      [door.x + nx * textDepth + ax * left, textY1, door.z + nz * textDepth + az * left],
+      [door.x + nx * textDepth + ax * right, textY1, door.z + nz * textDepth + az * right],
+      [u1, v0, u0, v1], white);
+  }
+
+  // A shallow entrance awning carries the cuisine/brand accent. Unlike the
+  // generic retail awning it is anchored to the real or generated front door.
+  const awningW = Math.min(signW + 0.55, available);
+  const awningD = restaurant.driveThrough ? 1.9 : 1.25;
+  box(solid,
+      door.x + nx * awningD * 0.5, baseY + 3.02,
+      door.z + nz * awningD * 0.5,
+      awningD, 0.1, awningW, accent, angle);
+  box(solid,
+      door.x + nx * (awningD - 0.04), baseY + 2.79,
+      door.z + nz * (awningD - 0.04),
+      0.08, 0.46, awningW, shade(accent, 0.82), angle);
+
+  if (restaurant.outdoorSeating && (door.edgeLength || 0) > 3.2) {
+    const side = Math.min(1.4, signW * 0.35);
+    box(solid,
+        door.x + nx * 0.55 + ax * (signW / 2 + 0.42), baseY + 0.78,
+        door.z + nz * 0.55 + az * (signW / 2 + 0.42),
+        0.08, 1.35, side, shade(panel, 0.78), angle);
   }
 }
 

@@ -14,7 +14,7 @@ import { Projection, haversine } from '../geo/projection.js';
 import { elevation } from '../geo/elevation.js';
 import { ndvi, classifyBiome, seasonalPhase } from '../geo/nasa.js';
 import { RegionLoader } from '../geo/overpass.js';
-import { extractFeatures, mergeOvertureBuildings, mergeOvertureRoads, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
+import { extractFeatures, mergeOvertureBuildings, mergeOvertureRoads, assignEntrances, assignRestaurantBusinesses, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
 import { buildGradingField } from './build/grading.js';
 import { MultiMesh, clipHalfPlane, colourToLinear } from './build/mesh.js';
 import { buildTerrain, terrainCollision, buildLandcover, buildWater, fetchChunkImagery, biomeGroundColour } from './build/ground.js';
@@ -315,6 +315,7 @@ export class World {
         const extra = extractFeatures(region.data, this.projection, { seen: this.seenFeatures });
         mergeFeatures(fs, extra);
         assignEntrances(fs);
+        assignRestaurantBusinesses(fs);
         fs.__detail = true;
         this.indexFeatures(extra);
       }
@@ -345,6 +346,7 @@ export class World {
     // anything is built from those heights.
     inferMissingHeights(fs);
     assignEntrances(fs);
+    assignRestaurantBusinesses(fs);
     fs.__detail = region.detailReady;
     fs.__attempt = region.attempts;
     this.regionFeatures.set(region.key, fs);

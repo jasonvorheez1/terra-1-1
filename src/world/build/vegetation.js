@@ -216,7 +216,13 @@ function canopyGeometry(shape) {
     const len = Math.hypot(nx, ny, nz);
     if (len < 1e-4) { nx = 0; ny = 1; nz = 0; }
     else { nx /= len; ny /= len; nz /= len; }
-    ny += 0.55;                                   // lean toward the sky
+    // Lean far enough that nothing in the crown ends up facing the ground. At
+    // 0.55 the underside normals still pointed down, so the hemisphere light
+    // handed them the *ground* colour and the bottom of every tree went black
+    // while its top was blown out. Past 1.0 the lowest vertex is level or
+    // above, so the whole crown reads as lit by sky, with the outward component
+    // keeping the sunny side brighter than the shaded one.
+    ny += 1.05;
     const l2 = Math.hypot(nx, ny, nz) || 1;
     nrm.setXYZ(i, nx / l2, ny / l2, nz / l2);
   }
@@ -426,9 +432,17 @@ export function buildTreeInstances(trees, ctx, group, collide) {
     const canopyMat = ctx.materials.foliage(sp.foliage);
     const canopy = new THREE.InstancedMesh(canopyGeometry(sp.shape), canopyMat, list.length);
     canopy.castShadow = true;
-    canopy.receiveShadow = true;
+    // Casts but does not receive. A crossed-card canopy is three planes sharing
+    // one volume, so each card sits inside its siblings' shadow, and a shadow
+    // map cannot resolve the centimetres between them - measured over Central
+    // Park, self-shadowing was taking the canopy from 212 to 125 of 255, which
+    // is the black-cut-out look. The outward normals already shade the crown as
+    // a mass; that is the better approximation at this scale, and it is what
+    // card foliage normally does.
+    canopy.receiveShadow = false;
 
     const trunkColour = new THREE.Color();
+    const canopyColour = new THREE.Color();
     for (let i = 0; i < list.length; i++) {
       const t = list[i];
       const trunkH = t.height * (1 - sp.crown * 0.55);
@@ -439,7 +453,13 @@ export function buildTreeInstances(trees, ctx, group, collide) {
       scl.set(t.trunkRadius * 2, trunkH, t.trunkRadius * 2);
       m.compose(pos, q, scl);
       trunk.setMatrixAt(i, m);
-      trunkColour.setHex(sp.bark === 'birch' ? 0xd8d2c4 : 0x6b5744);
+      // The bark texture is a greyscale mask averaging about half brightness,
+      // so a tint used raw comes out at half the colour it names: rough bark at
+      // 0x6b5744 landed around RGB 48, which is why trunks read as black
+      // sticks. Pre-divide by the mask's mean so tint x mask lands on the
+      // colour the tint actually names.
+      trunkColour.setHex(sp.bark === 'birch' ? 0xd8d2c4 : 0x6b5744)
+                 .multiplyScalar(sp.bark === 'birch' ? 1.05 : 1.7);
       trunk.setColorAt(i, trunkColour);
 
       const crownH = t.height * sp.crown;
@@ -452,7 +472,11 @@ export function buildTreeInstances(trees, ctx, group, collide) {
       scl.set(t.spread * 2 * wide, crownH * (sp.shape === 'conical' ? 1.15 : 1), t.spread * 2 * wide);
       m.compose(pos, q, scl);
       canopy.setMatrixAt(i, m);
-      canopy.setColorAt(i, t.colour);
+      // Same correction as the trunk: the leaf mask averages roughly 0.63 of
+      // full brightness, and the species colours were chosen as finished
+      // greens rather than albedos to be modulated by one.
+      canopyColour.copy(t.colour).multiplyScalar(1.25);
+      canopy.setColorAt(i, canopyColour);
 
       if (collide && t.trunkRadius > 0.12) {
         collide.cylinder(t.x, t.y, t.z, t.trunkRadius * 1.15, trunkH, 5);

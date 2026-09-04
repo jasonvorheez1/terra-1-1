@@ -35,7 +35,12 @@ export const OVERPASS_ENDPOINTS = [
 // server contains Switzerland only, so the response was valid for its database
 // but invalid for a world-wide client. A new namespace bypasses those poisoned
 // entries without making users clear all of their useful terrain/image cache.
-const OVERPASS_CACHE_VERSION = 2;
+const OVERPASS_CACHE_VERSION = 3;
+
+// Food venues are structural for rendering purposes: their names and cuisine
+// decide how the ground-floor storefront is built, so they must arrive with
+// the buildings rather than in the later decoration pass.
+const FOOD_AMENITIES = 'restaurant|cafe|fast_food|food_court|ice_cream|bar|pub';
 
 const BENCH_MS = 4 * 60 * 1000;      // how long a failing mirror sits out
 const benched = new Map();           // endpoint -> timestamp it may be retried
@@ -57,6 +62,9 @@ function structureQuery(bbox, timeout) {
   relation["landuse"]["type"="multipolygon"](${b});
   way["leisure"](${b});
   way["aeroway"](${b});
+  node["amenity"~"^(${FOOD_AMENITIES})$"](${b});
+  way["amenity"~"^(${FOOD_AMENITIES})$"](${b});
+  relation["amenity"~"^(${FOOD_AMENITIES})$"]["type"="multipolygon"](${b});
   way["amenity"~"^(parking|school|university|hospital|place_of_worship|marketplace|college|kindergarten|grave_yard)$"](${b});
   way["man_made"~"^(bridge|pier|breakwater|embankment|storage_tank|water_tower|tower|silo|chimney)$"](${b});
   way["barrier"](${b});

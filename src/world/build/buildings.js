@@ -295,7 +295,7 @@ function buildOne(b, ctx, multi, detail, collide) {
   // --- what makes it a school rather than a box ----------------------------
   const solidAcc = multi.for('solid', ctx.materials.solid({ roughness: 0.85 }));
   addArchitecture(b, ring, ctx, solidAcc, collide,
-                  { baseY, wallTopY, topY, colour }, featureRng('arch', b.id));
+                  { baseY, wallTopY, topY, colour }, featureRng('arch', b.id), multi);
 }
 
 function defaultRoofColour(b, rng) {

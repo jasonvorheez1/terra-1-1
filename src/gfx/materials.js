@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import {
   facadeTexture, groundFloorTexture, roofTexture, surfaceTexture,
   roadMarkingTexture, barkTexture, foliageTexture, grassBladeTexture,
-  waterNormalTexture, radialSprite,
+  waterNormalTexture, radialSprite, signGlyphTexture,
 } from './textures.js';
 import { FACADE_BAYS, BAY_WIDTH, FLOOR_HEIGHT } from './textures.js';
 import { clamp, smoothstep } from '../core/util.js';
@@ -335,6 +335,33 @@ export class MaterialLibrary {
     });
   }
 
+  /** Shared transparent glyph atlas for every named storefront sign. */
+  restaurantSignText() {
+    return this.get('restaurant-sign-text', () => {
+      const map = signGlyphTexture();
+      map.anisotropy = this.anisotropy();
+      const mat = new THREE.MeshStandardMaterial({
+        map,
+        emissiveMap: map,
+        emissive: new THREE.Color(0xfff0cc),
+        emissiveIntensity: 0,
+        vertexColors: true,
+        transparent: true,
+        alphaTest: 0.18,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
+        roughness: 0.58,
+        metalness: 0,
+        side: THREE.FrontSide,
+      });
+      mat.userData.litAtNight = true;
+      this.tracked.push(mat);
+      return mat;
+    });
+  }
+
   sprite(hardness, tint) {
     return this.get(`sprite:${hardness}:${tint}`, () => new THREE.SpriteMaterial({
       map: radialSprite(hardness, tint), transparent: true, depthWrite: false,
@@ -417,6 +444,7 @@ export function facadeStyleFor(building) {
 /** Pick the ground-floor treatment. */
 export function groundStyleFor(building) {
   const kind = building.kind;
+  if (building.groundUse === 'restaurant' || building.restaurant) return 'shop';
   if (kind === 'retail' || kind === 'office' || kind === 'hotel') return 'shop';
   if (kind === 'house' || kind === 'apartments') return 'residential';
   if (kind === 'industrial' || kind === 'shed' || kind === 'barn' ||

@@ -87,6 +87,53 @@ function grain(ctx, w, h, amount, seed, scale = 1) {
 
 const grey = (v) => `rgb(${v | 0},${v | 0},${v | 0})`;
 
+// --- storefront lettering -------------------------------------------------
+
+// One shared atlas can spell every restaurant name in the world without one
+// GPU texture and draw call per business. Non-Latin names retain a readable
+// OSM/Unicode name in the HUD; the compact street sign transliterates what it
+// can and uses '?' for glyphs this deliberately tiny atlas does not contain.
+export const SIGN_GLYPHS = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&'-.,/+:!?";
+export const SIGN_GLYPH_COLUMNS = 8;
+export const SIGN_GLYPH_ROWS = Math.ceil(SIGN_GLYPHS.length / SIGN_GLYPH_COLUMNS);
+
+export function signGlyphTexture() {
+  return cached('sign:glyph-atlas', () => {
+    const cellW = 64, cellH = 72;
+    const { canvas, ctx } = makeCanvas(
+      SIGN_GLYPH_COLUMNS * cellW,
+      SIGN_GLYPH_ROWS * cellH,
+    );
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 48px Arial, Helvetica, sans-serif';
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = 2;
+    for (let i = 0; i < SIGN_GLYPHS.length; i++) {
+      const col = i % SIGN_GLYPH_COLUMNS;
+      const row = Math.floor(i / SIGN_GLYPH_COLUMNS);
+      ctx.fillText(SIGN_GLYPHS[i], col * cellW + cellW / 2, row * cellH + cellH / 2 + 2);
+    }
+    return finish(canvas, { repeat: false, srgb: true });
+  });
+}
+
+/** UV rectangle for one character in the shared sign atlas. */
+export function signGlyphUv(char) {
+  let i = SIGN_GLYPHS.indexOf(char);
+  if (i < 0) i = SIGN_GLYPHS.indexOf('?');
+  const col = i % SIGN_GLYPH_COLUMNS;
+  const row = Math.floor(i / SIGN_GLYPH_COLUMNS);
+  const u0 = col / SIGN_GLYPH_COLUMNS;
+  const u1 = (col + 1) / SIGN_GLYPH_COLUMNS;
+  // Canvas rows run downward; texture UVs run upward.
+  const v0 = 1 - (row + 1) / SIGN_GLYPH_ROWS;
+  const v1 = 1 - row / SIGN_GLYPH_ROWS;
+  return [u0, v0, u1, v1];
+}
+
 // --- facades ---------------------------------------------------------------
 
 export const FACADE_TILE = 512;      // texture size
@@ -715,14 +762,50 @@ export function foliageTexture(kind = 'broadleaf') {
         ctx.restore();
       }
     } else {
-      const count = kind === 'sparse' ? 130 : 320;
-      for (let i = 0; i < count; i++) {
-        // Cluster toward the middle so the card silhouette is round.
+      // A canopy is not a flat stamp of leaves. Light falls on the top and the
+      // outside of the crown and is occluded toward the middle and underside,
+      // and it is that gradient - not the leaf shapes - that makes crossed
+      // cards read as a mass with depth rather than a cut-out.
+      //
+      // So the tone of each leaf is set by where it sits in the crown: bright
+      // at the top and rim, falling away downward and inward. Clumping into a
+      // few dozen bunches rather than scattering evenly gives the silhouette
+      // the lumpy edge a tree has, instead of a clean disc.
+      const clumps = kind === 'sparse' ? 16 : 26;
+      const perClump = kind === 'sparse' ? 9 : 15;
+      for (let c = 0; c < clumps; c++) {
+        const ca = rng() * Math.PI * 2;
+        const cr = Math.pow(rng(), 0.5) * S * 0.4;
+        const cx = S / 2 + Math.cos(ca) * cr;
+        const cy = S / 2 + Math.sin(ca) * cr * 0.92;
+        const spreadR = 14 + rng() * 20;
+        for (let i = 0; i < perClump; i++) {
+          const a = rng() * Math.PI * 2;
+          const rr = Math.pow(rng(), 0.6) * spreadR;
+          const x = cx + Math.cos(a) * rr;
+          const y = cy + Math.sin(a) * rr;
+          if (x < -8 || x > S + 8 || y < -8 || y > S + 8) continue;
+
+          // Height in the crown: 1 at the top, 0 at the bottom.
+          const up = 1 - y / S;
+          // How far out from the middle, 0 at the core and 1 at the rim.
+          const out = Math.min(1, Math.hypot(x - S / 2, (y - S / 2) * 1.1) / (S * 0.46));
+          const shade = 0.62 + up * 0.22 + out * 0.13;
+          const tone = clamp(108 + shade * 132 + (rng() - 0.5) * 20, 60, 246);
+          leaf(x, y, 6 + rng() * 11, rng() * Math.PI, tone);
+        }
+      }
+      // A scatter of loose leaves off the edge, so the silhouette breaks up
+      // instead of ending on a clean curve.
+      const strays = kind === 'sparse' ? 40 : 70;
+      for (let i = 0; i < strays; i++) {
         const a = rng() * Math.PI * 2;
-        const rr = Math.pow(rng(), 0.55) * S * 0.46;
+        const rr = S * (0.4 + rng() * 0.11);
         const x = S / 2 + Math.cos(a) * rr;
-        const y = S / 2 + Math.sin(a) * rr * 0.9;
-        leaf(x, y, 7 + rng() * 12, rng() * Math.PI, 168 + rng() * 78);
+        const y = S / 2 + Math.sin(a) * rr * 0.94;
+        const up = 1 - y / S;
+        leaf(x, y, 4 + rng() * 7, rng() * Math.PI,
+             clamp(150 + up * 90 + (rng() - 0.5) * 30, 60, 252));
       }
     }
     return finish(canvas, { repeat: false, srgb: true });
