@@ -27,7 +27,7 @@ function check(name, fn) {
 const PLACES = [
   { name: 'Paris - Ile de la Cite (bridges over the Seine)', lat: 48.8556, lon: 2.3450 },
   { name: 'Manhattan - Midtown (dense towers)', lat: 40.7549, lon: -73.9840 },
-  { name: 'Grandview, Missouri (suburban coverage)', lat: 38.88985, lon: -94.53131 },
+  { name: 'Las Vegas, Nevada (American desert city)', lat: 36.1716, lon: -115.1391 },
 ];
 
 for (const place of PLACES) {

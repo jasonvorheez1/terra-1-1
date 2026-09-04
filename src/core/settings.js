@@ -30,7 +30,7 @@ export const DEFAULTS = {
     bloom: true,
     motionBlur: false,
     terrainDetail: 'medium',    // controls elevation sampling resolution
-    satelliteGround: true,      // drape aerial imagery over the terrain
+    groundStyle: 'landscape',   // landscape | aerial
     waterReflections: true,
     dynamicLights: 24,
   },
@@ -88,6 +88,7 @@ export const DEFAULTS = {
     overpassTimeout: 90,
     regionSize: 1200,
     prefetchRadius: 1,
+    useOvertureBuildings: true,
     cacheEnabled: true,
   },
 };
@@ -98,7 +99,7 @@ export const PRESETS = {
     renderDistance: 350, resolutionScale: 0.7, shadows: false, shadowResolution: 512,
     antialias: false, anisotropy: 1, buildingDetail: 'low', vegetationDensity: 0.25,
     grass: false, grassDistance: 0, propDensity: 0.3, ambientOcclusion: false,
-    bloom: false, terrainDetail: 'low', satelliteGround: false, waterReflections: false,
+    bloom: false, terrainDetail: 'low', groundStyle: 'landscape', waterReflections: false,
     dynamicLights: 4,
   },
   low: {
@@ -106,28 +107,28 @@ export const PRESETS = {
     shadowDistance: 70, antialias: false, anisotropy: 2, buildingDetail: 'low',
     vegetationDensity: 0.5, grass: false, grassDistance: 20, propDensity: 0.5,
     ambientOcclusion: false, bloom: false, terrainDetail: 'low',
-    satelliteGround: true, waterReflections: false, dynamicLights: 8,
+    groundStyle: 'landscape', waterReflections: false, dynamicLights: 8,
   },
   medium: {
     renderDistance: 900, resolutionScale: 1.0, shadows: true, shadowResolution: 2048,
     shadowDistance: 140, antialias: true, anisotropy: 4, buildingDetail: 'high',
     vegetationDensity: 1.0, grass: true, grassDistance: 45, propDensity: 1.0,
     ambientOcclusion: true, bloom: true, terrainDetail: 'medium',
-    satelliteGround: true, waterReflections: true, dynamicLights: 24,
+    groundStyle: 'landscape', waterReflections: true, dynamicLights: 24,
   },
   high: {
     renderDistance: 1400, resolutionScale: 1.0, shadows: true, shadowResolution: 4096,
     shadowDistance: 220, antialias: true, anisotropy: 8, buildingDetail: 'high',
     vegetationDensity: 1.4, grass: true, grassDistance: 70, propDensity: 1.3,
     ambientOcclusion: true, bloom: true, terrainDetail: 'high',
-    satelliteGround: true, waterReflections: true, dynamicLights: 48,
+    groundStyle: 'landscape', waterReflections: true, dynamicLights: 48,
   },
   ultra: {
     renderDistance: 2000, resolutionScale: 1.0, shadows: true, shadowResolution: 4096,
     shadowDistance: 320, antialias: true, anisotropy: 16, buildingDetail: 'high',
     vegetationDensity: 1.8, grass: true, grassDistance: 110, propDensity: 1.6,
     ambientOcclusion: true, bloom: true, terrainDetail: 'high',
-    satelliteGround: true, waterReflections: true, dynamicLights: 64,
+    groundStyle: 'landscape', waterReflections: true, dynamicLights: 64,
   },
 };
 
@@ -150,7 +151,7 @@ export const SCHEMA = [
       { key: 'anisotropy', label: 'Texture filtering', type: 'select', options: [1, 2, 4, 8, 16], format: (v) => `${v}x` },
       { key: 'buildingDetail', label: 'Building detail', type: 'select', options: ['low', 'medium', 'high'] },
       { key: 'terrainDetail', label: 'Terrain detail', type: 'select', options: ['low', 'medium', 'high'] },
-      { key: 'satelliteGround', label: 'Satellite ground imagery', type: 'toggle', note: 'Drapes Esri World Imagery over the terrain.' },
+      { key: 'groundStyle', label: 'Ground appearance', type: 'select', options: ['landscape', 'aerial'], format: (v) => ({ landscape: 'Natural landscape', aerial: 'Aerial photograph' }[v]), note: 'Natural landscape uses OSM land cover and local biome textures. Aerial photograph uses Esri World Imagery.' },
       { key: 'vegetationDensity', label: 'Vegetation density', type: 'range', min: 0, max: 2, step: 0.1, format: (v) => `${Math.round(v * 100)}%` },
       { key: 'grass', label: 'Ground cover', type: 'toggle' },
       { key: 'grassDistance', label: 'Ground cover distance', type: 'range', min: 0, max: 140, step: 5, unit: 'm' },
@@ -220,6 +221,7 @@ export const SCHEMA = [
     id: 'data', label: 'Data', items: [
       { key: 'regionSize', label: 'Map region size', type: 'select', options: [800, 1000, 1200, 1600, 2000], format: (v) => `${v} m`, note: 'Larger regions mean fewer, bigger downloads.' },
       { key: 'prefetchRadius', label: 'Prefetch radius', type: 'select', options: [0, 1, 2], format: (v) => ['Current region only', 'One region ahead', 'Two regions ahead'][v] },
+      { key: 'useOvertureBuildings', label: 'Complete building coverage', type: 'toggle', note: 'Fills gaps in live OpenStreetMap with real footprints from the monthly Overture Maps buildings release.' },
       { key: 'overpassTimeout', label: 'Map server timeout', type: 'range', min: 30, max: 180, step: 10, unit: ' s' },
       { key: 'cacheEnabled', label: 'Cache downloaded map data', type: 'toggle' },
       { key: '__cache', label: 'Storage', type: 'cache' },

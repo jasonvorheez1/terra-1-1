@@ -34,6 +34,15 @@ export function surfaceFamily(id) {
   return SURFACE_FAMILY[id] || 'concrete';
 }
 
+/** Fine ground texture used beneath the more specific OSM land-cover areas. */
+export function terrainFamilyForBiome(biomeId) {
+  if (biomeId === 'desert') return 'sand';
+  if (biomeId === 'polar') return 'snow';
+  if (biomeId === 'tundra' || biomeId === 'alpine') return 'gravel';
+  if (biomeId === 'savanna' || biomeId === 'mediterranean') return 'dirt';
+  return 'grass';
+}
+
 export class MaterialLibrary {
   constructor(settings) {
     this.settings = settings;
@@ -126,14 +135,27 @@ export class MaterialLibrary {
   }
 
   /**
-   * Terrain. Optionally draped with satellite imagery, which is supplied per
-   * chunk, so this returns a fresh material when a map is given.
+   * Terrain. The default is a repeating, biome-appropriate ground texture;
+   * aerial imagery is still accepted per chunk when the user asks for it.
    */
-  terrain(map = null) {
+  terrain(map = null, biomeId = 'temperateBroadleaf') {
     if (!map) {
-      return this.get('terrain:plain', () => new THREE.MeshStandardMaterial({
-        vertexColors: true, roughness: 0.96, metalness: 0,
-      }));
+      const family = terrainFamilyForBiome(biomeId);
+      return this.get(`terrain:landscape:${family}`, () => {
+        // Surface textures are shared elsewhere at a different UV scale. Clone
+        // the texture object while retaining its canvas so this repeat does not
+        // turn a park or footpath into the same 8-metre-scale pattern.
+        const detail = surfaceTexture(family).clone();
+        detail.anisotropy = this.anisotropy();
+        detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
+        detail.repeat.set(32, 32);
+        detail.needsUpdate = true;
+        return new THREE.MeshStandardMaterial({
+          map: detail, vertexColors: true,
+          roughness: family === 'snow' ? 0.78 : 0.97,
+          metalness: 0,
+        });
+      });
     }
     map.anisotropy = this.anisotropy();
     return new THREE.MeshStandardMaterial({

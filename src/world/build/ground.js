@@ -2,8 +2,8 @@
 //
 // Terrain is a heightfield sampled from the AWS terrain tiles and then graded
 // to the roads crossing it, so streets sit in the landscape instead of slicing
-// through it. Aerial imagery is composited per chunk and draped over the mesh,
-// which is what makes an unmapped hillside still look like that hillside.
+// through it. Fine procedural texture follows the local biome by default;
+// aerial imagery can optionally be composited per chunk and draped over it.
 //
 // Land-cover polygons (parks, forests, sand, car parks) are drawn as separate
 // surfaces just above the terrain, ordered by the `z` in their spec so a

@@ -29,6 +29,7 @@ import {
 import { clamp, lerp, DEG } from '../../core/util.js';
 import { featureRng } from '../osm-tags.js';
 import { addArchitecture, addDoorway } from './architecture.js';
+import { box } from './props.js';
 
 const GROUND_BAND = 4.2;          // metres of ground-floor treatment
 const PARAPET_HEIGHT = 0.75;
@@ -138,6 +139,43 @@ function addPartedEntrance(b, ctx, multi, collide) {
   }
 }
 
+/**
+ * Columns holding a canopy up, in place of walls.
+ *
+ * Spaced around the perimeter rather than dropped at every traced node: a
+ * hand-drawn forecourt can carry forty nodes down one straight edge, and a
+ * column on each would be a fence. Corners always get one, because a canopy
+ * with nothing under its corners reads as floating however many posts are
+ * strung along the middle.
+ */
+function addCanopyColumns(ring, acc, baseY, topY, colour, collide, spacing = 9) {
+  const height = topY - baseY;
+  if (height < 0.4) return;
+  const r = clamp(height * 0.045, 0.11, 0.3);
+  const tone = shade(colour, 0.86);
+  const n = ring.length;
+  let carry = 0;
+
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], c = ring[(i + 1) % n];
+    const ex = c[0] - a[0], ez = c[1] - a[1];
+    const len = Math.hypot(ex, ez);
+    if (len < 1e-3) continue;
+
+    // The corner post, then evenly along the edge to the next corner.
+    post(a[0], a[1]);
+    for (let d = spacing - carry; d < len - 0.5; d += spacing) {
+      post(a[0] + (ex * d) / len, a[1] + (ez * d) / len);
+    }
+    carry = (carry + len) % spacing;
+  }
+
+  function post(x, z) {
+    box(acc, x, baseY + height / 2, z, r * 2, height, r * 2, tone);
+    if (collide) collide.box(x, baseY + height / 2, z, r * 2.2, height, r * 2.2);
+  }
+}
+
 function buildOne(b, ctx, multi, detail, collide) {
   const ring = ensureClockwise(b.ring);
   const holes = (b.holes || []).map(ensureClockwise);
@@ -166,14 +204,25 @@ function buildOne(b, ctx, multi, detail, collide) {
     : null;
 
   // --- walls ---------------------------------------------------------------
-  // A clockwise footprint is the convention for horizontal surfaces, but a
-  // vertical quad following that ring faces into the building. Walk the shell
-  // the other way so its geometric normals and front faces point outdoors.
-  addWallLoop(ring.slice().reverse(), upperAcc, groundAcc, baseY, bandY, wallTopY, colour);
-  for (const hole of holes) {
-    // The building occupies the outside of a courtyard ring, so its clockwise
-    // winding already points the wall into the open courtyard.
-    addWallLoop(hole, upperAcc, groundAcc, baseY, bandY, wallTopY, colour);
+  // `building=roof` is a roof and nothing else - a porte-cochere, a filling
+  // station, a bandstand, a platform canopy - so it gets columns instead of a
+  // shell. Walling them in turns a thing you shelter under into a sealed slab
+  // you cannot enter or see past, and the Strip is built out of them: 118 in
+  // this square kilometre of Las Vegas, the largest 8,100 m² at three metres
+  // tall, which walled in is a low windowless warehouse over the forecourt.
+  if (b.kind === 'canopy') {
+    addCanopyColumns(ring, multi.for('solid', ctx.materials.solid({ roughness: 0.85 })),
+                     baseY, wallTopY, colour, collide);
+  } else {
+    // A clockwise footprint is the convention for horizontal surfaces, but a
+    // vertical quad following that ring faces into the building. Walk the shell
+    // the other way so its geometric normals and front faces point outdoors.
+    addWallLoop(ring.slice().reverse(), upperAcc, groundAcc, baseY, bandY, wallTopY, colour);
+    for (const hole of holes) {
+      // The building occupies the outside of a courtyard ring, so its clockwise
+      // winding already points the wall into the open courtyard.
+      addWallLoop(hole, upperAcc, groundAcc, baseY, bandY, wallTopY, colour);
+    }
   }
 
   // --- roof ----------------------------------------------------------------

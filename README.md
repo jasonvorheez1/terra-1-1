@@ -25,7 +25,7 @@ The distinction matters, so it is drawn sharply.
 | Building heights, storey counts, roof shapes, materials, colours | OSM tags, following the [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings) scheme |
 | Terrain elevation | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen terrarium encoding, from SRTM and national DEMs) |
 | Vegetation density, greenness, biome | NASA [GIBS](https://nasa-gibs.github.io/gibs-api-docs/) MODIS Terra 16-day NDVI |
-| Aerial imagery on the terrain *and on flat roofs* | Esri World Imagery |
+| Optional aerial imagery on the terrain *and on flat roofs* | Esri World Imagery |
 | Place search | OpenStreetMap Nominatim |
 | Sun and moon position | Computed with the NOAA solar position algorithm from the real date, time and coordinates |
 
@@ -211,13 +211,17 @@ the trim runs along a simplified outline. Balconies get a hard per-building
 allowance: uncapped, they cost more than every other piece of geometry in the
 city combined. As built, detail is around 470 triangles per building.
 
-### Roofs are photographs
+### Natural ground, with optional aerial photographs
 
-Satellite imagery is a view from directly overhead, which is exactly what a flat
-roof looks like — so rather than inventing a roof texture, flat roofs are mapped
-into the same Esri photograph that is draped over the chunk's terrain. The UVs
-come from world position, so the picture lands on the building it is a picture
-of, aligned, for no extra download.
+The default ground is reconstructed rather than photographed. OSM land-cover
+polygons identify parks, woodland, sand, rock and paving; NASA's vegetation and
+biome data choose the underlying grass, soil, gravel, sand or snow material.
+Fine procedural texture keeps it readable from walking height without baking
+cars, building shadows and duplicate roads into the ground.
+
+An aerial-photo mode remains in Graphics settings. In that mode, flat roofs are
+mapped into the same Esri photograph draped over the chunk's terrain. The UVs
+come from world position, so the picture lands on the building it depicts.
 
 Pitched roofs keep their generated tiles and slates: an orthophoto stretched
 down a slope would not read correctly.
@@ -354,7 +358,7 @@ The code here is MIT licensed — see [LICENSE](LICENSE). The data is not:
 - Elevation from the AWS Terrain Tiles public dataset, itself assembled from
   SRTM, NED, and other national sources with their own terms.
 - NDVI and Blue Marble imagery courtesy of NASA EOSDIS GIBS.
-- Aerial imagery © Esri and its imagery partners; check their terms before any
-  use beyond looking at it.
+- Optional aerial imagery © Esri and its imagery partners; check their terms
+  before any use beyond looking at it.
 - The libraries under `vendor/` are redistributed unmodified and carry their own
   MIT licences — see [vendor/LICENSES.md](vendor/LICENSES.md).

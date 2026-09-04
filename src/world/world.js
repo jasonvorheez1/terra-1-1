@@ -14,7 +14,7 @@ import { Projection, haversine } from '../geo/projection.js';
 import { elevation } from '../geo/elevation.js';
 import { ndvi, classifyBiome, seasonalPhase } from '../geo/nasa.js';
 import { RegionLoader } from '../geo/overpass.js';
-import { extractFeatures, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
+import { extractFeatures, mergeOvertureBuildings, assignEntrances, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
 import { buildGradingField } from './build/grading.js';
 import { MultiMesh, clipHalfPlane, colourToLinear } from './build/mesh.js';
 import { buildTerrain, terrainCollision, buildLandcover, buildWater, fetchChunkImagery, biomeGroundColour } from './build/ground.js';
@@ -87,7 +87,11 @@ export class World {
 
     this.projection = new Projection(0, 0);
     this.origin = { lat: 0, lon: 0 };
-    this.regions = new RegionLoader({ sizeM: settings.data.regionSize, marginM: 220 });
+    this.regions = new RegionLoader({
+      sizeM: settings.data.regionSize,
+      marginM: 220,
+      useOvertureBuildings: settings.data.useOvertureBuildings,
+    });
     this.collisionWorld = new CollisionWorld();
 
     this.chunks = new Map();
@@ -180,8 +184,9 @@ export class World {
     this.baseElevation = groundElevation;
     this.ndviHere = ndviHere;
 
-    if (onProgress) onProgress(0.4, 'Downloading map data from OpenStreetMap');
+    if (onProgress) onProgress(0.4, 'Downloading streets and building footprints');
     this.regions.sizeM = this.settings.data.regionSize;
+    this.regions.useOvertureBuildings = this.settings.data.useOvertureBuildings;
 
     // Ask for the centre region and nothing else. Public Overpass instances
     // serve one query at a time, and a dense city region is several megabytes,
@@ -197,7 +202,7 @@ export class World {
       // and say so once it has been a while.
       onProgress(0.4 + Math.min(0.2, waited * 0.006),
         waited > 12 ? 'The map server is busy - still waiting, or trying a mirror'
-                    : 'Downloading map data from OpenStreetMap');
+                    : 'Downloading streets and building footprints');
     }, 1000);
     try {
       await centre.structurePromise;
@@ -301,9 +306,15 @@ export class World {
       return fs;
     }
     fs = extractFeatures(region.data, this.projection, { seen: this.seenFeatures });
+    fs.__overture = mergeOvertureBuildings(
+      fs,
+      region.overtureBuildings,
+      this.projection,
+      { seen: this.seenFeatures },
+    );
     reconcileBuildingParts(fs);
-    // Suburbs that were never traced get their houses laid out along the
-    // streets first, so the passes below treat them like any other building.
+    // Only after both real footprint sources have been exhausted do mapped-but
+    // unbuilt residential zones receive clearly marked synthetic houses.
     if (this.settings.world.inferHousing) inferSuburbanHousing(fs);
     // What a building is comes first: a footprint recognised as a house gets
     // the house class, and so is no longer a gap for the height pass to fill.
@@ -680,7 +691,7 @@ export class World {
 
     // Terrain first: everything else asks it for heights.
     ctx.aerial = {
-      enabled: this.settings.graphics.satelliteGround,
+      enabled: this.settings.graphics.groundStyle === 'aerial',
       minX: chunk.minX, minZ: chunk.minZ, size: chunk.size,
     };
     // Terrain follows the same bands. A chunk a kilometre away does not need a
@@ -690,7 +701,10 @@ export class World {
     const tcap = DETAIL_RANK[this.settings.graphics.terrainDetail] ?? 1;
     const res = TERRAIN_RES[DETAIL_NAME[Math.min(tcap, chunk.band ?? 2)]] || 33;
     chunk.terrain = buildTerrain(chunk, ctx, { resolution: res });
-    const terrainMesh = new THREE.Mesh(chunk.terrain.geometry, this.materials.terrain());
+    const terrainMesh = new THREE.Mesh(
+      chunk.terrain.geometry,
+      this.materials.terrain(null, this.biome && this.biome.id),
+    );
     terrainMesh.receiveShadow = true;
     terrainMesh.castShadow = false;
     terrainMesh.matrixAutoUpdate = false;
@@ -770,7 +784,7 @@ export class World {
     this.chunkDetail = null;              // back to the quality setting
 
     // Satellite drape arrives asynchronously and swaps in when it lands.
-    if (this.settings.graphics.satelliteGround) this.drapeImagery(chunk);
+    if (this.settings.graphics.groundStyle === 'aerial') this.drapeImagery(chunk);
 
     return chunk;
   }
@@ -781,7 +795,6 @@ export class World {
       if (!tex || !this.chunks.has(chunk.key)) { if (tex) tex.dispose(); return; }
       const mesh = chunk.group.getObjectByName('terrain');
       if (!mesh) { tex.dispose(); return; }
-      const old = mesh.material;
       mesh.material = this.materials.terrain(tex);
       // Fade the vertex tint back so the photograph dominates but still picks
       // up the biome colour where imagery is poor.
@@ -804,7 +817,6 @@ export class World {
         if (previous && previous !== this.materials.roof('flat')) previous.dispose();
       }
       chunk.imageryTexture = tex;
-      if (old && old !== this.materials.terrain()) old.dispose();
     } catch (e) { /* imagery is a bonus, never a blocker */ }
   }
 

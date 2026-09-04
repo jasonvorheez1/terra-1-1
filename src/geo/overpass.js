@@ -18,6 +18,7 @@
 
 import { fetchCached } from './net.js';
 import { padBBox } from './projection.js';
+import { overtureBuildings } from './overture.js';
 
 // Every endpoint in this list must mirror the whole planet. Regional Overpass
 // instances return a valid empty response outside their extract, which is
@@ -313,6 +314,9 @@ export class Region {
     this.sizeM = sizeM;
     this.data = new OsmData();
     this.data.bbox = bbox;
+    this.overtureBuildings = [];
+    this.overtureReady = false;
+    this.overtureError = null;
     this.structureReady = false;
     this.detailReady = false;
     this.failed = null;
@@ -333,10 +337,11 @@ export class Region {
  * still arrives complete from whichever side asks first.
  */
 export class RegionLoader {
-  constructor({ sizeM = 1200, marginM = 220, maxRegions = 9 } = {}) {
+  constructor({ sizeM = 1200, marginM = 220, maxRegions = 9, useOvertureBuildings = true } = {}) {
     this.sizeM = sizeM;
     this.marginM = marginM;
     this.maxRegions = maxRegions;
+    this.useOvertureBuildings = useOvertureBuildings;
     this.regions = new Map();
     this.onProgress = null;
     // Raised when a region gives up, and again when a retry rescues it, so the
@@ -392,18 +397,37 @@ export class RegionLoader {
     this.regions.set(key, region);
 
     region.structurePromise = (async () => {
-      try {
-        const json = await overpass.fetchStructure(bbox, { signal: region.abort.signal });
-        region.data.ingest(json).indexJunctions();
-        region.structureReady = true;
-        if (this.onProgress) this.onProgress(region, 'structure');
-      } catch (e) {
-        region.failed = e;
+      // OSM supplies the streets and highest-priority buildings; Overture's
+      // official tiles independently fill genuine footprint gaps. Fetch them
+      // together so the first frame does not pop thousands of houses in late.
+      const osmPending = overpass.fetchStructure(bbox, { signal: region.abort.signal });
+      const overturePending = this.useOvertureBuildings
+        ? overtureBuildings.fetchBuildings(bbox, { signal: region.abort.signal })
+        : Promise.resolve([]);
+      const [osmResult, overtureResult] = await Promise.allSettled([osmPending, overturePending]);
+
+      if (osmResult.status === 'fulfilled') {
+        region.data.ingest(osmResult.value).indexJunctions();
+      } else {
+        region.failed = osmResult.reason;
         region.failedAt = Date.now();
         region.spent = region.attempts >= this.maxAttempts;
-        region.structureReady = true;      // unblock the world; it renders terrain only
-        if (this.onProgress) this.onProgress(region, 'failed');
-        if (this.onFailure) this.onFailure(region, region.spent ? 'gave-up' : 'retrying');
+      }
+
+      if (overtureResult.status === 'fulfilled') {
+        region.overtureBuildings = overtureResult.value;
+        region.overtureReady = true;
+      } else {
+        // Coverage enhancement is intentionally non-fatal. Live OSM still
+        // renders exactly as before if S3 or a browser range request is down.
+        region.overtureError = overtureResult.reason;
+        region.overtureReady = true;
+      }
+
+      region.structureReady = true;
+      if (this.onProgress) this.onProgress(region, region.failed ? 'failed' : 'structure');
+      if (region.failed && this.onFailure) {
+        this.onFailure(region, region.spent ? 'gave-up' : 'retrying');
       }
       return region;
     })();

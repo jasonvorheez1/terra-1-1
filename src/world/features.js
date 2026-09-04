@@ -24,10 +24,12 @@ import {
   roadSpec, railSpec, barrierSpec, landcoverSpec, buildingHeights, facadeSpec,
   isWater, waterwayWidth, layerOffset, featureRng, parseLength, parseCount,
   isTruthy, lookupSurface, parseColour, describesItself, buildingEra,
+  BUILDING_CLASSES,
 } from './osm-tags.js';
 import {
   area, centroid, cleanRing, simplify, assembleRings, classifyRings, bounds,
-  polylineLength, resample, orientedBounds, pointInRing,
+  polygonArea, polylineLength, resample, orientedBounds, pointInRing,
+  pointInPolygon,
 } from './geometry.js';
 import { clamp, lerp, smoothstep } from '../core/util.js';
 
@@ -491,6 +493,246 @@ function addArea(fs, tags, ring, holes, source, id, tol, minBuildingArea) {
       area: a, spec: cover, tags, name: tags.name || null,
     });
   }
+}
+
+// --- Overture building merge ----------------------------------------------
+
+function parsedOvertureSources(properties) {
+  const value = properties && properties.sources;
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) { return []; }
+}
+
+function osmSourceKeys(properties) {
+  const out = [];
+  for (const source of parsedOvertureSources(properties)) {
+    if (source.provider !== 'osm' && source.dataset !== 'OpenStreetMap') continue;
+    const match = String(source.record_id || '').match(/^([wr])(\d+)(?:@|$)/);
+    if (!match) continue;
+    out.push(`${match[1] === 'w' ? 'way' : 'relation'}/${match[2]}`);
+  }
+  return out;
+}
+
+function overtureTags(properties) {
+  const p = properties || {};
+  const tags = { building: 'yes' };
+  const cls = [p.class, p.subtype].find((v) => v && BUILDING_CLASSES[v]);
+  if (cls) tags.building = cls;
+
+  const copy = (key, value) => {
+    if (value !== undefined && value !== null && value !== '') tags[key] = value;
+  };
+  copy('name', p['@name']);
+  copy('height', p.height);
+  copy('building:levels', p.num_floors);
+  copy('min_height', p.min_height);
+  copy('building:min_level', p.min_floor);
+  copy('building:colour', p.facade_color);
+  copy('building:material', p.facade_material);
+  copy('roof:colour', p.roof_color);
+  copy('roof:material', p.roof_material);
+  copy('roof:shape', p.roof_shape);
+  copy('roof:direction', p.roof_direction);
+  copy('roof:orientation', p.roof_orientation);
+  copy('roof:height', p.roof_height);
+  return tags;
+}
+
+function overtureRecordToBuilding(record, projection, minBuildingArea, tol) {
+  const p = record.properties || {};
+  if (p.is_underground === true || p.is_underground === 'true') return null;
+  const cleaned = cleanRing(toLocal(projection, record.outer || []));
+  if (cleaned.length < 3) return null;
+  const rawHoles = (record.holes || []).map((h) => cleanRing(toLocal(projection, h)))
+    .filter((h) => h.length >= 3);
+  const a = polygonArea(cleaned, rawHoles);
+  if (a < minBuildingArea) return null;
+
+  const simple = simplify(cleaned, Math.min(tol, 0.2), true);
+  const ring = simple.length >= 3 ? simple : cleaned;
+  const holes = rawHoles.map((h) => {
+    const s = simplify(h, Math.min(tol, 0.2), true);
+    return s.length >= 3 ? s : h;
+  });
+  const tags = overtureTags(p);
+  const id = record.id;
+  const rng = featureRng('overture', id);
+  const heights = buildingHeights(tags, a, rng);
+  return {
+    id,
+    source: `overture/${id}`,
+    ring,
+    holes,
+    area: a,
+    tags,
+    heights,
+    facade: facadeSpec(tags, heights.cls, rng),
+    name: tags.name || null,
+    centroid: centroid(ring),
+    bounds: bounds(ring),
+    isPart: false,
+    levels: heights.levels,
+    kind: heights.cls.kind,
+    era: buildingEra(tags),
+    overture: true,
+    overtureId: record.gersId || id,
+    geometrySource: p['@geometry_source'] || null,
+  };
+}
+
+function boundsOverlap(a, b) {
+  return a.maxX >= b.minX && a.minX <= b.maxX &&
+         a.maxZ >= b.minZ && a.minZ <= b.maxZ;
+}
+
+/**
+ * Approximate polygon intersection-over-union with a regular sample grid.
+ * It is only used after bounding-box and spatial-grid rejection, so the cost
+ * is paid for the handful of footprints that could genuinely be duplicates.
+ */
+export function approximateBuildingIoU(a, b, samples = 12) {
+  if (!boundsOverlap(a.bounds, b.bounds)) return 0;
+  const minX = Math.min(a.bounds.minX, b.bounds.minX);
+  const minZ = Math.min(a.bounds.minZ, b.bounds.minZ);
+  const maxX = Math.max(a.bounds.maxX, b.bounds.maxX);
+  const maxZ = Math.max(a.bounds.maxZ, b.bounds.maxZ);
+  const dx = (maxX - minX) / samples;
+  const dz = (maxZ - minZ) / samples;
+  if (dx <= 0 || dz <= 0) return 0;
+
+  let intersection = 0, union = 0;
+  for (let iz = 0; iz < samples; iz++) {
+    const z = minZ + (iz + 0.5) * dz;
+    for (let ix = 0; ix < samples; ix++) {
+      const x = minX + (ix + 0.5) * dx;
+      const inA = pointInPolygon(a.ring, a.holes, x, z);
+      const inB = pointInPolygon(b.ring, b.holes, x, z);
+      if (inA || inB) union++;
+      if (inA && inB) intersection++;
+    }
+  }
+  return union ? intersection / union : 0;
+}
+
+function enrichOsmBuilding(building, record) {
+  const incoming = overtureTags(record.properties);
+  const tags = { ...(building.tags || {}) };
+  let changed = false;
+  for (const [key, value] of Object.entries(incoming)) {
+    const replaceGenericClass = key === 'building' && tags[key] === 'yes' && value !== 'yes';
+    if ((tags[key] === undefined || tags[key] === null || tags[key] === '' || replaceGenericClass) &&
+        value !== undefined && value !== null && value !== '') {
+      tags[key] = value;
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+
+  const rng = featureRng('b', building.id);
+  const heights = buildingHeights(tags, building.area, rng);
+  building.tags = tags;
+  building.heights = heights;
+  building.facade = facadeSpec(tags, heights.cls, rng);
+  building.name = tags.name || building.name || null;
+  building.levels = heights.levels;
+  building.kind = heights.cls.kind;
+  building.era = buildingEra(tags);
+  building.overtureEnriched = true;
+  building.overtureId = record.gersId || record.id;
+  return true;
+}
+
+/**
+ * Merge decoded Overture footprint records into an extracted OSM FeatureSet.
+ *
+ * Precedence is deliberately strict:
+ *   1. a live OSM way/relation is kept and may receive missing attributes;
+ *   2. Overture features whose chosen geometry source is OSM are not copied;
+ *   3. non-OSM footprints matching a newly-added live OSM shape are dropped;
+ *   4. only the remaining real footprints fill gaps in OSM coverage.
+ */
+export function mergeOvertureBuildings(fs, records, projection, opts = {}) {
+  const { seen = new Set(), minBuildingArea = 6, simplifyTolerance = 0.25 } = opts;
+  const stats = { added: 0, enriched: 0, duplicates: 0, osmGeometry: 0, invalid: 0 };
+  if (!records || !records.length) return stats;
+
+  const osmBySource = new Map();
+  for (const b of fs.buildings) {
+    if (!b.source || b.overture) continue;
+    osmBySource.set(b.source, b);
+    osmBySource.set(b.source.split('#')[0], b);
+  }
+
+  // Attribute enrichment is exact: use the OSM record id carried in the
+  // Overture source list, never geometry proximity.
+  const matchedRecords = new Set();
+  for (const record of records) {
+    for (const key of osmSourceKeys(record.properties)) {
+      const building = osmBySource.get(key);
+      if (!building) continue;
+      if (enrichOsmBuilding(building, record)) stats.enriched++;
+      matchedRecords.add(record.id);
+      break;
+    }
+  }
+
+  // Spatial index of live OSM footprints for the small window where OSM was
+  // edited after this monthly Overture release and source ids cannot yet match.
+  const CELL = 80;
+  const grid = new Map();
+  for (const b of fs.buildings) {
+    if (b.overture) continue;
+    const x0 = Math.floor(b.bounds.minX / CELL), x1 = Math.floor(b.bounds.maxX / CELL);
+    const z0 = Math.floor(b.bounds.minZ / CELL), z1 = Math.floor(b.bounds.maxZ / CELL);
+    for (let z = z0; z <= z1; z++) {
+      for (let x = x0; x <= x1; x++) {
+        const key = `${x},${z}`;
+        let list = grid.get(key);
+        if (!list) { list = []; grid.set(key, list); }
+        list.push(b);
+      }
+    }
+  }
+
+  for (const record of records) {
+    const source = `overture/${record.id}`;
+    if (seen.has(source)) continue;
+    seen.add(source);
+
+    const geomSource = String(record.properties && record.properties['@geometry_source'] || '');
+    if (matchedRecords.has(record.id) || geomSource.toLowerCase() === 'openstreetmap') {
+      stats.osmGeometry++;
+      continue;
+    }
+
+    const candidate = overtureRecordToBuilding(record, projection, minBuildingArea, simplifyTolerance);
+    if (!candidate) { stats.invalid++; continue; }
+
+    const possible = new Set();
+    const x0 = Math.floor(candidate.bounds.minX / CELL), x1 = Math.floor(candidate.bounds.maxX / CELL);
+    const z0 = Math.floor(candidate.bounds.minZ / CELL), z1 = Math.floor(candidate.bounds.maxZ / CELL);
+    for (let z = z0; z <= z1; z++) {
+      for (let x = x0; x <= x1; x++) {
+        const list = grid.get(`${x},${z}`);
+        if (list) for (const b of list) possible.add(b);
+      }
+    }
+    let duplicate = false;
+    for (const b of possible) {
+      if (!boundsOverlap(candidate.bounds, b.bounds)) continue;
+      if (approximateBuildingIoU(candidate, b) > 0.48) { duplicate = true; break; }
+    }
+    if (duplicate) { stats.duplicates++; continue; }
+
+    fs.buildings.push(candidate);
+    stats.added++;
+  }
+  return stats;
 }
 
 /** Which prop model (if any) a tagged node should become. */

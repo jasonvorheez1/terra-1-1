@@ -75,7 +75,7 @@
     </div>
     <footer class="attrib">
       Map data © OpenStreetMap contributors · Elevation: AWS Terrain Tiles ·
-      Vegetation: NASA GIBS MODIS NDVI · Imagery: Esri World Imagery
+      Landscape: OSM + NASA biome data · Optional imagery: Esri World Imagery
     </footer>
   </section>
 
@@ -206,11 +206,12 @@
               MODIS Terra 16-day NDVI. The satellite's vegetation index decides how densely
               the world is planted, how green it reads, and which biome the species palette
               comes from. A parched August park is parched here too.</li>
-          <li><strong>Aerial imagery</strong> — Esri World Imagery, draped over the terrain and
-              over flat roofs. A satellite photograph is a view from directly overhead, which
-              is exactly what a flat roof looks like, so the roofs you see are real pictures of
-              those roofs. Facades cannot come from aerial imagery — they are not visible from
-              above — so those stay generated.</li>
+          <li><strong>Ground appearance</strong> — OSM land cover and NASA biome data select
+              generated grass, soil, gravel, sand or snow detail by default. This avoids
+              painting overhead cars, shadows and duplicate roads under the 3D world. Esri
+              World Imagery remains available as the optional Aerial photograph mode; there it
+              is also aligned to flat roofs. Facades stay generated because they are not
+              visible from above.</li>
           <li><strong>Place search</strong> — OpenStreetMap Nominatim.</li>
           <li><strong>The sun and moon</strong> — computed, not faked: the NOAA solar position
               algorithm, from the real date, time and coordinates. Midsummer in Svalbard
