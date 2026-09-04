@@ -40,6 +40,10 @@ const DETAIL_RANK = { low: 0, medium: 1, high: 2 };
 const DETAIL_NAME = ['low', 'medium', 'high'];
 const DETAIL_BANDS = [340, 850];      // high inside 340 m, medium inside 850 m
 
+// Covers that actually grow blades. `urban` and `bare` carry a little greenery
+// in their tint, which is a statement about colour, not about grass.
+const GRASSY_COVERS = new Set(['grass', 'scrub', 'forest', 'orchard', 'vineyard', 'wetland']);
+
 /** One built square of world: meshes, a collider, and what it cost. */
 class Chunk {
   constructor(cx, cz) {
@@ -582,15 +586,19 @@ export class World {
     if (!chunk || chunk.state !== 'ready') return null;
     const fs = this.chunkFeatures.get(chunk.key);
     if (!fs) return null;
+    // Whatever is on top decides, not whatever is greenest. Filtering to
+    // vegetated covers first meant a paved square could never veto the polygon
+    // underneath it - and `landuse=residential` carries veg 0.14, just over the
+    // old threshold, so grass was growing across every residential district in
+    // the world, Marienplatz included, paving and all.
     let best = null;
     for (const lc of fs.landcover) {
-      if (lc.spec.veg < 0.12) continue;
       const b = lc.bounds;
       if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
       if (!pointInPolygon(lc.ring, lc.holes, x, z)) continue;
       if (!best || lc.spec.z > best.spec.z) best = lc;
     }
-    if (!best) return null;
+    if (!best || !GRASSY_COVERS.has(best.spec.cover)) return null;
     const geo = this.projection.toGeo(x, z);
     const v = ndvi.sample(geo.lat, geo.lon);
     const lushness = clamp(v * 1.6, 0.2, 1.4) * clamp(best.spec.veg * 2, 0.3, 1.5);

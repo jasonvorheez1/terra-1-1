@@ -85,9 +85,8 @@ export function buildTerrain(chunk, ctx, opts = {}) {
                    [minX, minZ + size], [minX + size, minZ + size]];
   const cnr = corners.map(([px, pz]) => {
     const geo = ctx.projection.toGeo(px, pz);
-    const c = new THREE.Color(biomeGroundColour(ctx.biome, ctx.ndviAt(geo.lat, geo.lon), season));
-    c.convertSRGBToLinear();
-    return c;
+    // Already linear: see the note in colourToLinear.
+    return new THREE.Color(biomeGroundColour(ctx.biome, ctx.ndviAt(geo.lat, geo.lon), season));
   });
 
   for (let j = 0; j < n; j++) {

@@ -395,6 +395,15 @@ export class GroundCover {
       g.translate(0, 0.5, 0);
       return g;
     })()]);
+    // Point the blade normals at the sky. They come out of the plane geometry
+    // horizontal, which is true of the card and false of grass: a vertical
+    // surface takes almost nothing from a sun overhead, so a lawn at midday
+    // rendered as a field of black tufts. Facing them up is the usual trick -
+    // it is what lets a flat card read as a curved blade catching the light.
+    const nrm = crossed.getAttribute('normal');
+    for (let i = 0; i < nrm.count; i++) nrm.setXYZ(i, 0, 1, 0);
+    nrm.needsUpdate = true;
+
     this.mesh = new THREE.InstancedMesh(crossed, this.ctx.materials.grass(), capacity);
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = false;
@@ -455,7 +464,10 @@ export class GroundCover {
         scl.set(0.3 + rng() * 0.24, h, 0.3 + rng() * 0.24);
         m.compose(pos, q, scl);
         this.mesh.setMatrixAt(n, m);
-        colour.copy(info.colour).offsetHSL(0, rng() * 0.1 - 0.05, rng() * 0.14 - 0.07);
+        // Blades stand up into the light, so they read brighter than the flat
+        // ground they grow out of rather than the same shade.
+        colour.copy(info.colour).multiplyScalar(1.35)
+              .offsetHSL(0, rng() * 0.1 - 0.05, rng() * 0.1 - 0.04);
         this.mesh.setColorAt(n, colour);
         n++;
       }

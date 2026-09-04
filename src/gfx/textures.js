@@ -736,8 +736,12 @@ export function grassBladeTexture() {
       const h = S * (0.5 + rng() * 0.48);
       const w = 3 + rng() * 4;
       const lean = (rng() - 0.5) * 26;
-      const tone = 96 + rng() * 90;
-      ctx.fillStyle = `rgb(${Math.round(tone * 0.5)},${Math.round(tone)},${Math.round(tone * 0.4)})`;
+      // Near-greyscale, like every other surface texture here, because the
+      // instance colour carries the hue. Painting the blade green as well
+      // multiplied one green by another and left a bright lawn covered in
+      // near-black tufts.
+      const tone = 150 + rng() * 86;
+      ctx.fillStyle = `rgb(${Math.round(tone * 0.86)},${Math.round(tone)},${Math.round(tone * 0.72)})`;
       ctx.beginPath();
       ctx.moveTo(x - w / 2, S);
       ctx.quadraticCurveTo(x - w / 4 + lean * 0.5, S - h * 0.5, x + lean, S - h);

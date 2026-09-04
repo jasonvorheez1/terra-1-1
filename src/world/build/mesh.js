@@ -197,8 +197,12 @@ const colourCache = new Map();
 export function colourToLinear(hex) {
   let c = colourCache.get(hex);
   if (c) return c;
+  // THREE.ColorManagement is on by default from r155, so `new Color(hex)` has
+  // already taken the hex as sRGB and stored it in the linear working space.
+  // Converting again applied the transfer function twice and left every
+  // vertex-coloured surface in the world between six and thirteen times too
+  // dark - which is not a lighting problem, however much it looks like one.
   const col = new THREE.Color(hex);
-  col.convertSRGBToLinear();
   c = [col.r, col.g, col.b];
   colourCache.set(hex, c);
   return c;
