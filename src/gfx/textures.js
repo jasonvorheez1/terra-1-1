@@ -669,7 +669,10 @@ export function foliageTexture(kind = 'broadleaf') {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(rot);
-      ctx.fillStyle = `rgb(${Math.round(tone * 0.55)},${Math.round(tone)},${Math.round(tone * 0.42)})`;
+      // Near-greyscale on purpose: the species vertex colour supplies the
+      // green. Painting the leaf green as well multiplied one green by
+      // another and left a sunlit canopy reading almost black.
+      ctx.fillStyle = `rgb(${Math.round(tone * 0.9)},${Math.round(tone)},${Math.round(tone * 0.8)})`;
       ctx.beginPath();
       ctx.ellipse(0, 0, r, r * 0.52, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -682,7 +685,8 @@ export function foliageTexture(kind = 'broadleaf') {
         const y = rng() * S;
         const spread = 1 - Math.abs(x - S / 2) / (S / 2);
         if (rng() > spread * 0.9 + 0.1) continue;
-        ctx.strokeStyle = `rgba(${30 + rng() * 40},${70 + rng() * 60},${34 + rng() * 30},0.95)`;
+        const t = 150 + rng() * 86;
+        ctx.strokeStyle = `rgba(${Math.round(t * 0.88)},${Math.round(t)},${Math.round(t * 0.76)},0.95)`;
         ctx.lineWidth = 1.6;
         ctx.beginPath();
         ctx.moveTo(x, y);
@@ -696,7 +700,8 @@ export function foliageTexture(kind = 'broadleaf') {
         ctx.save();
         ctx.translate(S / 2, S / 2);
         ctx.rotate(a);
-        ctx.strokeStyle = `rgb(${40 + rng() * 30},${110 + rng() * 50},${44 + rng() * 25})`;
+        const t = 156 + rng() * 76;
+        ctx.strokeStyle = `rgb(${Math.round(t * 0.88)},${Math.round(t)},${Math.round(t * 0.76)})`;
         for (let i = 0; i < 24; i++) {
           const t = i / 24;
           ctx.lineWidth = 2.4;
@@ -717,7 +722,7 @@ export function foliageTexture(kind = 'broadleaf') {
         const rr = Math.pow(rng(), 0.55) * S * 0.46;
         const x = S / 2 + Math.cos(a) * rr;
         const y = S / 2 + Math.sin(a) * rr * 0.9;
-        leaf(x, y, 7 + rng() * 12, rng() * Math.PI, 110 + rng() * 110);
+        leaf(x, y, 7 + rng() * 12, rng() * Math.PI, 168 + rng() * 78);
       }
     }
     return finish(canvas, { repeat: false, srgb: true });

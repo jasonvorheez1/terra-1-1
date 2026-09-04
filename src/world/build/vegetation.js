@@ -40,6 +40,14 @@ export const SPECIES = {
   shrub:     { foliage: 'sparse',    bark: 'rough', shape: 'round',    h: [1.1, 2.6], crown: 0.82, spread: 1.0, colours: [0x5c6b3c, 0x667443] },
   dwarfPine: { foliage: 'needle',    bark: 'rough', shape: 'conical',  h: [2, 6],   crown: 0.8,  spread: 0.55, colours: [0x2f4630, 0x384f36] },
   cactus:    { foliage: 'sparse',    bark: 'rough', shape: 'columnar', h: [2, 6],   crown: 0.7,  spread: 0.25, colours: [0x4f6b45, 0x58744d] },
+  // Regional characters. Each is here because its silhouette is the thing that
+  // tells you what continent you are standing on.
+  redwood:   { foliage: 'needle',    bark: 'rough', shape: 'conical',  h: [40, 85], crown: 0.72, spread: 0.34, colours: [0x2c4630, 0x334f35, 0x263d29] },
+  eucalyptus:{ foliage: 'sparse',    bark: 'birch', shape: 'umbrella', h: [12, 30], crown: 0.34, spread: 0.85, colours: [0x6d8060, 0x7a8b6a, 0x5f7355] },
+  bamboo:    { foliage: 'sparse',    bark: 'birch', shape: 'columnar', h: [6, 16],  crown: 0.62, spread: 0.2,  colours: [0x6d8f3e, 0x789a47, 0x5f8035] },
+  baobab:    { foliage: 'sparse',    bark: 'rough', shape: 'umbrella', h: [9, 20],  crown: 0.24, spread: 1.15, colours: [0x6b7444, 0x76804d] },
+  jacaranda: { foliage: 'broadleaf', bark: 'rough', shape: 'round',    h: [8, 16],  crown: 0.55, spread: 0.9,  colours: [0x6a6a9c, 0x7576a8, 0x5d7a4a] },
+  joshua:    { foliage: 'sparse',    bark: 'rough', shape: 'umbrella', h: [4, 11],  crown: 0.4,  spread: 0.7,  colours: [0x5c6b48, 0x667551] },
 };
 
 const BIOME_SPECIES = {
@@ -80,9 +88,63 @@ export function speciesFromTag(value) {
   return null;
 }
 
-/** Pick a species for a biome, deterministically per position. */
-export function pickSpecies(biomeId, rng) {
-  const list = BIOME_SPECIES[biomeId] || BIOME_SPECIES.temperateBroadleaf;
+/**
+ * Regional overrides, layered on top of the biome.
+ *
+ * A biome says what the climate supports; it does not say what actually grows
+ * there. Temperate broadleaf covers Bavaria, Ohio and Honshu, and the three
+ * look nothing alike - beech and lime against oak and sugar maple against
+ * bamboo and ginkgo. Only the combinations that differ are listed; everything
+ * else falls through to the biome table, which is the right answer often
+ * enough.
+ */
+const REGIONAL_SPECIES = {
+  northEurope: {
+    temperateBroadleaf: [{ id: 'oak', w: 4 }, { id: 'birch', w: 4 }, { id: 'poplar', w: 2 }, { id: 'spruce', w: 2 }],
+    borealConifer:      [{ id: 'spruce', w: 7 }, { id: 'birch', w: 3 }, { id: 'pine', w: 2 }],
+  },
+  centralEurope: {
+    temperateBroadleaf: [{ id: 'oak', w: 4 }, { id: 'maple', w: 3 }, { id: 'planeTree', w: 3 }, { id: 'birch', w: 2 }, { id: 'spruce', w: 1 }],
+  },
+  mediterranean: {
+    temperateBroadleaf: [{ id: 'olive', w: 3 }, { id: 'cypress', w: 3 }, { id: 'pine', w: 3 }, { id: 'planeTree', w: 2 }],
+  },
+  northAmerica: {
+    temperateBroadleaf: [{ id: 'maple', w: 5 }, { id: 'oak', w: 4 }, { id: 'birch', w: 2 }, { id: 'pine', w: 2 }],
+    temperateGrass:     [{ id: 'oak', w: 3 }, { id: 'poplar', w: 3 }, { id: 'shrub', w: 4 }],
+    borealConifer:      [{ id: 'spruce', w: 5 }, { id: 'fir', w: 3 }, { id: 'redwood', w: 1 }, { id: 'birch', w: 2 }],
+  },
+  southwest: {
+    desert:             [{ id: 'joshua', w: 4 }, { id: 'cactus', w: 4 }, { id: 'shrub', w: 5 }, { id: 'palm', w: 2 }],
+    temperateGrass:     [{ id: 'shrub', w: 6 }, { id: 'joshua', w: 2 }, { id: 'oak', w: 1 }],
+    mediterranean:      [{ id: 'palm', w: 3 }, { id: 'olive', w: 2 }, { id: 'shrub', w: 3 }, { id: 'cypress', w: 1 }],
+  },
+  eastAsia: {
+    temperateBroadleaf: [{ id: 'bamboo', w: 3 }, { id: 'maple', w: 4 }, { id: 'pine', w: 3 }, { id: 'oak', w: 2 }],
+    tropicalSeasonal:   [{ id: 'bamboo', w: 4 }, { id: 'palm', w: 3 }, { id: 'jungle', w: 3 }],
+  },
+  latinAmerica: {
+    tropicalRainforest: [{ id: 'jungle', w: 6 }, { id: 'kapok', w: 3 }, { id: 'palm', w: 2 }],
+    temperateBroadleaf: [{ id: 'jacaranda', w: 3 }, { id: 'oak', w: 3 }, { id: 'palm', w: 2 }],
+    savanna:            [{ id: 'acacia', w: 4 }, { id: 'jacaranda', w: 2 }, { id: 'shrub', w: 4 }],
+  },
+  africa: {
+    savanna:            [{ id: 'acacia', w: 5 }, { id: 'baobab', w: 2 }, { id: 'shrub', w: 4 }],
+    tropicalSeasonal:   [{ id: 'acacia', w: 3 }, { id: 'baobab', w: 2 }, { id: 'palm', w: 3 }, { id: 'jungle', w: 2 }],
+    desert:             [{ id: 'palm', w: 2 }, { id: 'shrub', w: 6 }, { id: 'acacia', w: 2 }],
+  },
+  oceania: {
+    temperateBroadleaf: [{ id: 'eucalyptus', w: 6 }, { id: 'shrub', w: 2 }, { id: 'pine', w: 1 }],
+    temperateGrass:     [{ id: 'eucalyptus', w: 5 }, { id: 'shrub', w: 4 }],
+    savanna:            [{ id: 'eucalyptus', w: 4 }, { id: 'acacia', w: 3 }, { id: 'shrub', w: 3 }],
+    mediterranean:      [{ id: 'eucalyptus', w: 4 }, { id: 'shrub', w: 3 }, { id: 'pine', w: 2 }],
+  },
+};
+
+/** Pick a species for a biome and region, deterministically per position. */
+export function pickSpecies(biomeId, rng, region = null) {
+  const regional = region && REGIONAL_SPECIES[region] && REGIONAL_SPECIES[region][biomeId];
+  const list = regional || BIOME_SPECIES[biomeId] || BIOME_SPECIES.temperateBroadleaf;
   if (!list.length) return null;
   return rng.weighted(list).id;
 }
@@ -117,6 +179,29 @@ function canopyGeometry(shape) {
   }
 
   const merged = mergeGeometries(geos);
+
+  // Point the normals out of the canopy, not out of the cards.
+  //
+  // A crossed-card canopy is three vertical planes, so their normals lie flat
+  // in the horizontal plane and take almost nothing from a sun overhead - at
+  // midday a forest rendered as a field of black cut-outs. Treating the cluster
+  // as the ball of leaves it stands for, and pointing each vertex away from the
+  // middle of it, makes the canopy shade like a mass instead: lit on the sunny
+  // side, dark on the other, bright on top. Leaning the result upward keeps the
+  // top brighter than the flanks, which is where the light actually comes from.
+  const pos = merged.attributes.position;
+  const nrm = merged.attributes.normal;
+  for (let i = 0; i < pos.count; i++) {
+    let nx = pos.getX(i), ny = pos.getY(i), nz = pos.getZ(i);
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-4) { nx = 0; ny = 1; nz = 0; }
+    else { nx /= len; ny /= len; nz /= len; }
+    ny += 0.55;                                   // lean toward the sky
+    const l2 = Math.hypot(nx, ny, nz) || 1;
+    nrm.setXYZ(i, nx / l2, ny / l2, nz / l2);
+  }
+  nrm.needsUpdate = true;
+
   geometryCache.set(key, merged);
   return merged;
 }
@@ -193,7 +278,7 @@ export function collectTrees(features, chunk, ctx) {
     const rng = makeRng(hashString(`tree${t.id}`));
     let id = speciesFromTag(t.species);
     if (!id && t.leafType === 'needleleaved') id = 'spruce';
-    if (!id) id = pickSpecies(ctx.biome.id, rng);
+    if (!id) id = pickSpecies(ctx.biome.id, rng, ctx.region);
     if (!id) continue;
     const sp = SPECIES[id];
     const height = t.height || (t.circumference ? clamp(t.circumference * 7, 3, 40)
@@ -204,7 +289,7 @@ export function collectTrees(features, chunk, ctx) {
   // 2. Tree rows, planted along the way at the tagged spacing.
   for (const row of features.treeRows) {
     const rng = makeRng(hashString(`row${row.id}`));
-    let id = speciesFromTag(row.species) || pickSpecies(ctx.biome.id, rng);
+    let id = speciesFromTag(row.species) || pickSpecies(ctx.biome.id, rng, ctx.region);
     if (!id) continue;
     const spacing = clamp(row.spacing || 8, 3, 30);
     for (let i = 1; i < row.pts.length; i++) {
@@ -249,7 +334,7 @@ export function collectTrees(features, chunk, ctx) {
       if (rng() > 0.55 + fbm2(x * 0.03, z * 0.03, 2) * 0.45) continue;
       const id = lc.spec.cover === 'orchard' || lc.spec.cover === 'vineyard'
         ? (lc.spec.cover === 'vineyard' ? 'shrub' : 'olive')
-        : pickSpecies(ctx.biome.id, rng);
+        : pickSpecies(ctx.biome.id, rng, ctx.region);
       if (!id) continue;
       const sp = SPECIES[id];
       const scale = lc.spec.cover === 'forest' ? 1 : 0.85;

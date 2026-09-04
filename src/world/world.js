@@ -132,6 +132,9 @@ export class World {
         return this.projection.toGeo(c[0], c[1]);
       },
       get biome() { return this.__world.biome; },
+      // Which part of the world we are in, for the facade palettes and the
+      // tree species tables. Set once per session from the origin.
+      get region() { return this.__world.region; },
       get season() { return this.__world.season; },
       // The chunk being built may ask for less than the quality setting allows;
       // see chunkDetailFor.
@@ -159,7 +162,7 @@ export class World {
     this.origin = { lat, lon };
     this.projection.setOrigin(lat, lon);
     // Facade palettes are regional; a session has one location.
-    setFacadeRegion(lat, lon);
+    this.region = setFacadeRegion(lat, lon);
     this.date = date;
     this.ready = false;
 

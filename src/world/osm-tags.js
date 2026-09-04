@@ -481,7 +481,7 @@ export function regionForLatLon(lat, lon) {
   // Arizona, and picking by continent-sized box gets most of that.
   if (lat > 35 && lat < 72 && lon > -11 && lon < 42) {
     if (lat < 45 && lon > -10 && lon < 30) return 'mediterranean';
-    if (lat > 51 && lon > -11 && lon < 16) return 'northEurope';
+    if (lat > 51 && lon > -11 && lon < 32) return 'northEurope';
     return 'centralEurope';
   }
   if (lat > 14 && lat < 72 && lon > -170 && lon < -52) {
@@ -492,6 +492,11 @@ export function regionForLatLon(lat, lon) {
   }
   if (lat > 18 && lat < 46 && lon > 100 && lon < 146) return 'eastAsia';
   if (lat < 14 && lat > -56 && lon > -95 && lon < -33) return 'latinAmerica';
+  // These two carry no facade palette of their own - they fall back to the
+  // generic one - but the trees growing in them are nothing like anywhere
+  // else's, and the vegetation tables key off the same region.
+  if (lat < -9 && lat > -48 && lon > 112 && lon < 180) return 'oceania';
+  if (lat < 37 && lat > -35 && lon > -18 && lon < 52) return 'africa';
   return 'default';
 }
 
