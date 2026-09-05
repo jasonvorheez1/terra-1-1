@@ -389,6 +389,13 @@ export function buildParkingMarkings(lc, ctx, multi, lift = 0.1, collide = null)
       if (cars >= maxCars) continue;
       const rng = featureRng('parked-car', `${whole.id}:${bay.rowIndex}:${bay.bayIndex}`);
       if (rng() >= occupancy) continue;
+      // World-local (0, 0) is the arrival point. A synthetic or incompletely
+      // mapped car park can legitimately cover it, but spawning a parked car
+      // against the player's camera/capsule makes the first frame look huge
+      // and can trap movement before the world has even finished streaming.
+      // Spawn selection may shift the capsule to nearby clear ground or a
+      // pavement, so reserve a wider arrival bubble than the exact origin.
+      if (Math.hypot(bay.car.x, bay.car.z) < 22) continue;
       addParkedCar(
         carAcc, collide, ctx,
         bay.car.x, bay.car.z, bay.car.dx, bay.car.dz, rng,

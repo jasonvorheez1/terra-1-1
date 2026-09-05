@@ -183,6 +183,42 @@ test('an auto-oriented restaurant gains an asphalt frontage, shrubs and road sig
   assert.equal(fs.landcover.length, 1);
 });
 
+test('commercial frontage follows the public road instead of a parking aisle', () => {
+  const fs = new FeatureSet();
+  const b = building('aisle-frontage', rect(-8, -6, 16, 12), {
+    building: 'commercial', amenity: 'restaurant', name: 'Corner Grill',
+  });
+  fs.buildings.push(b);
+  const aisleTags = { highway: 'service', service: 'parking_aisle' };
+  const publicTags = { highway: 'secondary', surface: 'asphalt' };
+  fs.roads.push(
+    {
+      id: 'aisle', source: 'way/aisle', pts: [[-30, 9], [30, 9]],
+      rawPts: [[-30, 9], [30, 9]], spec: roadSpec(aisleTags), tags: aisleTags,
+    },
+    {
+      id: 'public', source: 'way/public', pts: [[-60, 30], [60, 30]],
+      rawPts: [[-60, 30], [60, 30]], spec: roadSpec(publicTags), tags: publicTags,
+    },
+  );
+  const unrelatedRing = rect(48, -5, 18, 18);
+  fs.landcover.push({
+    id: 'unrelated-parking', source: 'way/unrelated-parking',
+    ring: unrelatedRing, holes: [], bounds: bounds(unrelatedRing),
+    area: area(unrelatedRing), spec: { key: 'amenity=parking' },
+    tags: { amenity: 'parking' },
+  });
+
+  assignRestaurantBusinesses(fs);
+  inferBuildingKinds(fs);
+  assignEntrances(fs);
+  const result = inferCommercialSites(fs);
+  assert.equal(result.sites, 1);
+  assert.equal(result.parking, 1, 'a distant neighbouring lot must not suppress this site');
+  assert.equal(b.commercialSite.road.source, 'way/public');
+  assert.equal(b.commercialSite.parkingSynthetic, true);
+});
+
 test('several restaurants in one large block retain separate facade positions', () => {
   const fs = new FeatureSet();
   const b = building('mall', rect(0, 0, 50, 24));

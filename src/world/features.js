@@ -1159,14 +1159,27 @@ function applyInferredBuildingClass(b, buildingType, levels = null) {
   b.kind = heights.cls.kind;
 }
 
-function parkingNearBuilding(fs, b, maxDistance = 45) {
+function parkingNearBuilding(fs, b, maxDistance = 24) {
   for (const lc of fs.landcover || []) {
     if (lc.spec?.key !== 'amenity=parking') continue;
     const bb = lc.bounds || (lc.bounds = bounds(lc.ring));
     if (b.centroid[0] < bb.minX - maxDistance || b.centroid[0] > bb.maxX + maxDistance ||
         b.centroid[1] < bb.minZ - maxDistance || b.centroid[1] > bb.maxZ + maxDistance) continue;
-    if (pointInPolygon(lc.ring, lc.holes || [], b.centroid[0], b.centroid[1]) ||
-        distanceToRing(lc.ring, b.centroid[0], b.centroid[1]) <= maxDistance) return lc;
+    if (pointInPolygon(lc.ring, lc.holes || [], b.centroid[0], b.centroid[1])) return lc;
+
+    // Compare the footprint edges, not only their centroids. A broad 12,000 m²
+    // car park sixty metres away used to suppress the frontage of an unrelated
+    // restaurant, while a building sitting in a cut-out hole could be missed.
+    // Both errors are common in retail districts with several separate lots.
+    const parkingEdges = [lc.ring, ...(lc.holes || [])];
+    let gap = Infinity;
+    for (const p of b.ring) {
+      for (const edge of parkingEdges) {
+        gap = Math.min(gap, distanceToRing(edge, p[0], p[1]));
+      }
+    }
+    for (const p of lc.ring) gap = Math.min(gap, distanceToRing(b.ring, p[0], p[1]));
+    if (gap <= maxDistance) return lc;
   }
   return null;
 }
@@ -1704,11 +1717,12 @@ export function snapToRing(ring, x, z, centre) {
 }
 
 /** Closest point on any road centreline within `maxD` metres. */
-function nearestRoadPoint(roads, x, z, maxD, motorOnly = false) {
+function nearestRoadPoint(roads, x, z, maxD, motorOnly = false, accept = null) {
   let best = null, bestD2 = maxD * maxD;
   for (const r of roads) {
     if (r.spec.tunnel) continue;
     if (motorOnly && ['foot', 'cycle', 'steps', 'plaza'].includes(r.spec.kind)) continue;
+    if (accept && !accept(r)) continue;
     const pts = r.rawPts || r.pts;
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1], c = pts[i];
@@ -1764,7 +1778,21 @@ export function inferCommercialSites(fs, opts = {}) {
     if (!b.restaurant || b.commercialForm !== 'auto-oriented' || b.commercialSite ||
         b.levels > maxLevels || b.area < 45 || b.area > maxBuildingArea || !b.door) continue;
 
-    const target = nearestRoadPoint(fs.roads, b.centroid[0], b.centroid[1], maxRoadDistance, true);
+    // Prefer the actual street frontage. Parking aisles and drive-through ways
+    // often run within a metre of the wall; treating one as the destination
+    // road leaves no room for the very parking/site context it describes.
+    const publicRoad = (r) => {
+      const highway = r.tags?.highway || r.spec?.highway;
+      return highway !== 'service' && highway !== 'track' &&
+             highway !== 'motorway' && highway !== 'motorway_link';
+    };
+    const usableAccess = (r) => !['driveway', 'parking_aisle', 'drive-through']
+      .includes(r.tags?.service);
+    const target = nearestRoadPoint(
+      fs.roads, b.centroid[0], b.centroid[1], maxRoadDistance, true, publicRoad,
+    ) || nearestRoadPoint(
+      fs.roads, b.centroid[0], b.centroid[1], maxRoadDistance, true, usableAccess,
+    );
     if (!target || target.road.spec.bridge || target.road.spec.kind === 'motorway') continue;
     const front = doorOnRing(b.ring, b.centroid, [target.x, target.z]) || b.door;
     if (!front) continue;
@@ -1787,7 +1815,7 @@ export function inferCommercialSites(fs, opts = {}) {
 
     let frontageHalfWidth = clamp(
       Math.max(front.edgeLength * 0.58, Math.sqrt(b.area) * 0.58), 6, 25);
-    const mappedParking = parkingNearBuilding(fs, b, 65);
+    const mappedParking = parkingNearBuilding(fs, b, 28);
     let parking = mappedParking;
     if (!parking && available >= 10) {
       const inner = 2.0;
