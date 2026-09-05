@@ -484,17 +484,25 @@ function inferRoofShape(cls, tags, hints) {
     return 'flat';
   }
 
-  if (area < 450 && storeys <= 3) {
-    if (base !== 'flat') {
-      if (pick < 0.54) return base;
-      if (pick < 0.74) return base === 'gabled' ? 'hipped' : 'gabled';
-      if (pick < 0.87) return 'half-hipped';
-      return area < 80 ? 'pyramidal' : 'gambrel';
-    }
-    if (pick < 0.42) return 'gabled';
-    if (pick < 0.66) return 'hipped';
-    if (pick < 0.78) return 'skillion';
-    return 'flat';
+  // A class that already expects a pitch varies within its own family: a
+  // terrace of houses gets gables and hips, not gables and flat lids.
+  if (base !== 'flat' && area < 600 && storeys <= 3) {
+    if (pick < 0.54) return base;
+    if (pick < 0.74) return base === 'gabled' ? 'hipped' : 'gabled';
+    if (pick < 0.87) return 'half-hipped';
+    return area < 80 ? 'pyramidal' : 'gambrel';
+  }
+
+  // A class that says flat is evidence, not an absence of it: a shop or an
+  // apartment block is flat-roofed on purpose. Only a genuinely house-sized
+  // footprint is allowed to argue with it, and even then it usually loses -
+  // otherwise a dense city comes out as a village, which is what happened when
+  // this threshold was 450 m2 and Manhattan turned 54% pitched.
+  if (area < 220 && storeys <= 2) {
+    if (pick < 0.55) return 'flat';
+    if (pick < 0.78) return 'gabled';
+    if (pick < 0.92) return 'hipped';
+    return 'skillion';
   }
 
   if (era.period === 'historic') return pick < 0.6 ? 'gabled' : 'mansard';

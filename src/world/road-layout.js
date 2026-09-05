@@ -2,6 +2,7 @@
 // decisions which affect junction geometry can be tested directly in Node.
 
 import { clamp } from '../core/util.js';
+import { orientedBounds, pointInPolygon } from './geometry.js';
 
 const NORTH_AMERICAN_MARKINGS = new Set(['northAmerica', 'southwest']);
 
@@ -219,4 +220,63 @@ export function roadMarkingLayout(spec, region = 'default', drivingSide = 'right
     }
   }
   return lines;
+}
+
+/**
+ * Geometry-only parking bay layout shared by the renderer and Node tests.
+ * Rows follow the lot's minimum-area bounding box and every separator is
+ * rejected unless it lies inside both the complete and currently clipped lot.
+ */
+export function parkingBayLayout(lc, opts = {}) {
+  const { stall = 2.7, bayDepth = 5.1 } = opts;
+  const parkingType = String(lc.tags?.parking || '').toLowerCase();
+  if (parkingType === 'underground' || parkingType === 'multi-storey' ||
+      parkingType === 'rooftop' || (lc.area || 0) < 70) return [];
+
+  const whole = lc.__parent || lc;
+  const ob = orientedBounds(whole.ring);
+  let ux = ob.axisX[0], uz = ob.axisX[1], long = ob.width;
+  let vx = ob.axisZ[0], vz = ob.axisZ[1], cross = ob.depth;
+  if (cross > long) {
+    [ux, vx] = [vx, ux];
+    [uz, vz] = [vz, uz];
+    [long, cross] = [cross, long];
+  }
+  if (long < 8 || cross < 6.2) return [];
+
+  const halfLong = long / 2;
+  const halfCross = cross / 2;
+  const rows = cross >= 17
+    ? [{ edge: -halfCross + 0.45, dir: 1 }, { edge: halfCross - 0.45, dir: -1 }]
+    : [{ edge: -halfCross + 0.45, dir: 1 }];
+  const depth = Math.min(bayDepth, cross - 1.1);
+  const out = [];
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
+    for (let u = -halfLong + stall; u <= halfLong - stall * 0.55; u += stall) {
+      const ax = ob.cx + ux * u + vx * row.edge;
+      const az = ob.cz + uz * u + vz * row.edge;
+      const bx = ax + vx * depth * row.dir;
+      const bz = az + vz * depth * row.dir;
+      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      if (!pointInPolygon(lc.ring, lc.holes || [], mx, mz) ||
+          !pointInPolygon(whole.ring, whole.holes || [], ax, az) ||
+          !pointInPolygon(whole.ring, whole.holes || [], bx, bz)) continue;
+      const cu = u - stall * 0.5;
+      const cv = row.edge + row.dir * Math.min(2.75, depth * 0.55);
+      out.push({
+        ax, az, bx, bz, ux, uz,
+        rowIndex,
+        bayIndex: Math.round((u + halfLong) / stall),
+        car: {
+          x: ob.cx + ux * cu + vx * cv,
+          z: ob.cz + uz * cu + vz * cv,
+          dx: vx * row.dir,
+          dz: vz * row.dir,
+        },
+      });
+    }
+  }
+  return out;
 }
