@@ -23,6 +23,7 @@ import {
   facadeStyleFor, groundStyleFor, roofPatternFor,
   FACADE_U_PER_METRE, FACADE_V_PER_METRE,
 } from '../../gfx/materials.js';
+import { FACADE_BAYS } from '../../gfx/textures.js';
 import {
   insetRing, orientedBounds, centroid, area, bounds, perimeter, pointInRing,
 } from '../geometry.js';
@@ -234,6 +235,8 @@ function buildOne(b, ctx, multi, detail, collide) {
   if (wallHeight <= 0.05) return;
 
   const colour = colourToLinear(b.facade.colour);
+  // This building's own window grid, rather than the one every building shares.
+  const uv = facadeUv(b);
   const rng = featureRng('bg', b.id);
 
   const style = facadeStyleFor(b);
@@ -270,11 +273,11 @@ function buildOne(b, ctx, multi, detail, collide) {
     // A clockwise footprint is the convention for horizontal surfaces, but a
     // vertical quad following that ring faces into the building. Walk the shell
     // the other way so its geometric normals and front faces point outdoors.
-    addWallLoop(ring.slice().reverse(), upperAcc, groundAcc, baseY, bandY, wallTopY, colour);
+    addWallLoop(ring.slice().reverse(), upperAcc, groundAcc, baseY, bandY, wallTopY, colour, uv);
     for (const hole of holes) {
       // The building occupies the outside of a courtyard ring, so its clockwise
       // winding already points the wall into the open courtyard.
-      addWallLoop(hole, upperAcc, groundAcc, baseY, bandY, wallTopY, colour);
+      addWallLoop(hole, upperAcc, groundAcc, baseY, bandY, wallTopY, colour, uv);
     }
   }
 
@@ -317,7 +320,22 @@ function defaultRoofColour(b, rng) {
  * same physical size no matter how long the wall is, and stay continuous
  * around corners.
  */
-function addWallLoop(ring, upperAcc, groundAcc, baseY, bandY, topY, colour) {
+/**
+ * How many texture repeats a metre of this building's wall is worth.
+ *
+ * Falls back to the global constants when a building predates the per-building
+ * rhythm - Overture records and inferred houses both build facades through
+ * other paths - so nothing has to be rebuilt for this to be safe.
+ */
+function facadeUv(b) {
+  const f = b && b.facade;
+  return {
+    u: f && f.bay ? 1 / (f.bay * FACADE_BAYS) : FACADE_U_PER_METRE,
+    v: f && f.floorH ? 1 / (f.floorH * FACADE_BAYS) : FACADE_V_PER_METRE,
+  };
+}
+
+function addWallLoop(ring, upperAcc, groundAcc, baseY, bandY, topY, colour, uv) {
   const n = ring.length;
   let u = 0;
   for (let i = 0; i < n; i++) {
@@ -326,8 +344,8 @@ function addWallLoop(ring, upperAcc, groundAcc, baseY, bandY, topY, colour) {
     const dx = c[0] - a[0], dz = c[1] - a[1];
     const len = Math.hypot(dx, dz);
     if (len < 0.05) continue;
-    const u0 = u * FACADE_U_PER_METRE;
-    const u1 = (u + len) * FACADE_U_PER_METRE;
+    const u0 = u * uv.u;
+    const u1 = (u + len) * uv.u;
     u += len;
 
     // Slightly vary tone per wall so a box does not read as flat-shaded.
@@ -347,7 +365,7 @@ function addWallLoop(ring, upperAcc, groundAcc, baseY, bandY, topY, colour) {
       // v runs from 0 at the bottom of the band to one repeat per storey at
       // the top. addQuad gives uv[1] to the bottom edge and uv[3] to the top,
       // so passing them the other way round hangs every window upside down.
-      const vTop = (topY - upperBase) * FACADE_V_PER_METRE;
+      const vTop = (topY - upperBase) * uv.v;
       upperAcc.addQuad(
         [a[0], upperBase, a[1]], [c[0], upperBase, c[1]],
         [c[0], topY, c[1]], [a[0], topY, a[1]],

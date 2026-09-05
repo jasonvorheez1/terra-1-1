@@ -389,6 +389,39 @@ export function collectTrees(features, chunk, ctx) {
   if (density <= 0) return out;
 
   const inChunk = (x, z) => x >= minX && x < maxX && z >= minZ && z < maxZ;
+  const structures = [...(features.buildings || []), ...(features.buildingParts || [])];
+  const hardCovers = (features.landcover || []).filter((lc) =>
+    lc.spec?.physical !== false && !['forest', 'scrub', 'grass', 'park', 'orchard',
+      'vineyard', 'crop', 'wetland'].includes(lc.spec?.cover));
+  const blockedForPlanting = (x, z, sourceCover) => {
+    for (const b of structures) {
+      const bb = b.bounds || (b.bounds = bounds(b.ring));
+      if (x >= bb.minX && x <= bb.maxX && z >= bb.minZ && z <= bb.maxZ &&
+          pointInPolygon(b.ring, b.holes || [], x, z)) return true;
+    }
+    for (const lc of hardCovers) {
+      if (lc === sourceCover || lc.spec.z < sourceCover.spec.z) continue;
+      const bb = lc.bounds || (lc.bounds = bounds(lc.ring));
+      if (x >= bb.minX && x <= bb.maxX && z >= bb.minZ && z <= bb.maxZ &&
+          pointInPolygon(lc.ring, lc.holes || [], x, z)) return true;
+    }
+    for (const road of features.roads || []) {
+      if (road.spec?.tunnel || road.spec?.bridge) continue;
+      const clearance = (road.spec?.width || 2) / 2 + 1.2;
+      const maxD2 = clearance * clearance;
+      const pts = road.rawPts || road.pts || [];
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const ex = b[0] - a[0], ez = b[1] - a[1];
+        const ll = ex * ex + ez * ez;
+        const t = ll > 1e-9
+          ? clamp(((x - a[0]) * ex + (z - a[1]) * ez) / ll, 0, 1) : 0;
+        const px = a[0] + ex * t, pz = a[1] + ez * t;
+        if ((x - px) ** 2 + (z - pz) ** 2 <= maxD2) return true;
+      }
+    }
+    return false;
+  };
 
   // 1. Individually mapped trees. These are exact, so they are never skipped.
   for (const t of features.trees) {
@@ -449,7 +482,8 @@ export function collectTrees(features, chunk, ctx) {
     if (x1 <= x0 || z1 <= z0) continue;
 
     const pts = jitteredScatter(x0, z0, x1, z1, perTree, rng,
-      (x, z) => pointInPolygon(lc.ring, lc.holes, x, z));
+      (x, z) => pointInPolygon(lc.ring, lc.holes, x, z) &&
+                !blockedForPlanting(x, z, lc));
     for (const [x, z] of pts) {
       // Thin the edges of a wood so it does not end in a wall of trunks.
       if (rng() > 0.55 + fbm2(x * 0.03, z * 0.03, 2) * 0.45) continue;

@@ -521,7 +521,24 @@ export function roofSpec(tags, cls, hints = {}) {
 }
 
 /** Facade colour and material, resolving the several tags people use. */
-export function facadeSpec(tags, cls, rng) {
+/**
+ * How wide a window bay is, and how tall a storey.
+ *
+ * These were one pair of constants for the whole planet, so every building
+ * anywhere had its windows on exactly the same grid - which is most of why a
+ * street reads as one building repeated. The bay now varies per building the
+ * way real frontages do, between about three and four and a half metres, and
+ * the row spacing comes from the building's own storey height rather than a
+ * fixed 3.2 m, so a 12-storey block with 3 m floors gets twelve rows of
+ * windows instead of eleven and a bit.
+ */
+function facadeRhythm(cls, floorH, rng) {
+  const wide = cls && (cls.kind === 'office' || cls.kind === 'retail' || cls.kind === 'industrial');
+  const bay = wide ? 3.6 + rng() * 1.5 : 2.9 + rng() * 1.1;
+  return { bay, floorH: clamp(floorH || (cls && cls.floorH) || 3.2, 2.4, 5.5) };
+}
+
+export function facadeSpec(tags, cls, rng, floorH) {
   const material = lookupMaterial(tags['building:material'] || tags['material'] ||
                                   tags['building:facade:material'] || tags['wall']);
   let colour = parseColour(tags['building:colour'] || tags['building:color'] ||
@@ -530,7 +547,7 @@ export function facadeSpec(tags, cls, rng) {
   if (colour == null) {
     colour = material ? material.tint : palettedColour(cls, rng);
   }
-  return { colour, material };
+  return { colour, material, ...facadeRhythm(cls, floorH, rng) };
 }
 
 // Believable facade palettes per building kind, sampled deterministically.

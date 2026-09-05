@@ -524,7 +524,7 @@ function addArea(fs, tags, ring, holes, source, id, tol, minBuildingArea) {
     const ringOut = simplified.length >= 3 ? simplified : cleaned;
     const rng = featureRng('b', id);
     const heights = buildingHeights(tags, a, rng);
-    const facade = facadeSpec(tags, heights.cls, rng);
+    const facade = facadeSpec(tags, heights.cls, rng, heights.floorH);
     const rec = {
       id, source, ring: ringOut, holes: holes.map((h) => cleanRing(h)).filter((h) => h.length >= 3),
       area: a, tags, heights, facade,
@@ -648,7 +648,7 @@ function overtureRecordToBuilding(record, projection, minBuildingArea, tol) {
     area: a,
     tags,
     heights,
-    facade: facadeSpec(tags, heights.cls, rng),
+    facade: facadeSpec(tags, heights.cls, rng, heights.floorH),
     name: tags.name || null,
     centroid: centroid(ring),
     bounds: bounds(ring),
@@ -714,7 +714,7 @@ function enrichOsmBuilding(building, record) {
   const heights = buildingHeights(tags, building.area, rng);
   building.tags = tags;
   building.heights = heights;
-  building.facade = facadeSpec(tags, heights.cls, rng);
+  building.facade = facadeSpec(tags, heights.cls, rng, heights.floorH);
   building.name = tags.name || building.name || null;
   building.levels = heights.levels;
   building.kind = heights.cls.kind;
@@ -1154,7 +1154,7 @@ function applyInferredBuildingClass(b, buildingType, levels = null) {
   const rng = featureRng('b', b.id);
   const heights = buildingHeights(inferredTags, b.area, rng);
   b.heights = heights;
-  b.facade = facadeSpec(inferredTags, heights.cls, rng);
+  b.facade = facadeSpec(inferredTags, heights.cls, rng, heights.floorH);
   b.levels = heights.levels;
   b.kind = heights.cls.kind;
 }
@@ -1333,7 +1333,7 @@ export function inferBuildingKinds(fs, opts = {}) {
     const rng = featureRng('b', b.id);
     const asHouse = { ...t, building: 'house' };
     b.heights = buildingHeights(asHouse, b.area, rng);
-    b.facade = facadeSpec(asHouse, b.heights.cls, rng);
+    b.facade = facadeSpec(asHouse, b.heights.cls, rng, b.heights.floorH);
     b.levels = b.heights.levels;
     b.kind = b.heights.cls.kind;
     b.kindInferred = 'house';
@@ -1512,7 +1512,7 @@ export function inferSuburbanHousing(fs, opts = {}) {
             id: `syn/${road.id}/${step}/${side}`,
             source: `synthetic/${road.id}/${step}/${side}`,
             ring, holes: [], area: jw * jd, tags, heights,
-            facade: facadeSpec(tags, heights.cls, rng),
+            facade: facadeSpec(tags, heights.cls, rng, heights.floorH),
             name: null,
             centroid: [ox, oz],
             bounds: bounds(ring),
