@@ -66,6 +66,42 @@ export function terrainLushFamily(biomeId) {
   return 'grass';
 }
 
+/**
+ * How far light wraps past the terminator on foliage. 0 is plain Lambert.
+ *
+ * A leaf is thin and translucent: much of the light striking its far side comes
+ * through it, and a canopy is full of gaps doing the same at a larger scale.
+ * Shading leaf cards as opaque surfaces instead leaves every cluster whose
+ * normal points away from the sun with nothing but the blue-grey sky term, so
+ * half of each crown went flat grey - still reading as the "black trees" from
+ * the shaded side long after the tint and the texture were right. Wrapping the
+ * diffuse term lets the sun reach round the crown without blowing out the lit
+ * side: measured over one Central Park frame, the share of canopy pixels below
+ * 32 of 255 fell from 14% to 8%, and below 64 from 29% to 17%.
+ */
+const FOLIAGE_WRAP = 0.9;
+
+/**
+ * Shade a material with wrapped diffuse in place of plain N.L.
+ *
+ * three exposes no hook for the lighting term, so the chunk is inlined and its
+ * one dot product rewritten. The program cache key has to move with it, or
+ * three hands back a program it compiled from the unpatched chunk.
+ */
+function wrapDiffuse(mat, wrap) {
+  const DOT_NL = 'float dotNL = saturate( dot( geometryNormal, directLight.direction ) );';
+  const wrapped = `float dotNL = saturate( ( dot( geometryNormal, directLight.direction ) + ${wrap.toFixed(2)} ) / ${(1 + wrap).toFixed(2)} );`;
+  mat.onBeforeCompile = (shader) => {
+    const chunk = THREE.ShaderChunk.lights_physical_pars_fragment;
+    if (!chunk.includes(DOT_NL)) return;   // three changed the chunk; leave it alone
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <lights_physical_pars_fragment>', chunk.replace(DOT_NL, wrapped),
+    );
+  };
+  mat.customProgramCacheKey = () => `wrap-diffuse:${wrap}`;
+  return mat;
+}
+
 export class MaterialLibrary {
   constructor(settings) {
     this.settings = settings;
@@ -139,12 +175,13 @@ export class MaterialLibrary {
   }
 
   /** Road markings, drawn slightly above the carriageway. */
-  markings(kind) {
-    return this.get(`markings:${kind}`, () => {
+  markings(kind, colour = 0xffffff) {
+    return this.get(`markings:${kind}:${colour}`, () => {
       const map = roadMarkingTexture(kind);
       map.anisotropy = this.anisotropy();
       return new THREE.MeshStandardMaterial({
         map,
+        color: colour,
         transparent: true,
         roughness: 0.85,
         metalness: 0,
@@ -264,7 +301,8 @@ export class MaterialLibrary {
       map.anisotropy = this.anisotropy();
       map.repeat.set(1, 3);
       return new THREE.MeshStandardMaterial({
-        map, vertexColors: true, roughness: 0.94, metalness: 0,
+        // Instanced trunks, no color attribute - see foliage() below.
+        map, vertexColors: false, roughness: 0.94, metalness: 0,
       });
     });
   }
@@ -274,15 +312,24 @@ export class MaterialLibrary {
     return this.get(`foliage:${kind}`, () => {
       const map = foliageTexture(kind);
       map.anisotropy = this.anisotropy();
-      return new THREE.MeshStandardMaterial({
+      return wrapDiffuse(new THREE.MeshStandardMaterial({
         map,
-        vertexColors: true,
+        // Deliberately NOT vertexColors. These meshes are instanced and get
+        // their colour per instance, and their geometry carries no `color`
+        // attribute - but `vertexColors: true` still defines USE_COLOR, so the
+        // shader runs `vColor *= color` against an attribute that was never
+        // bound and multiplies by whatever the driver leaves there. Measured on
+        // one frame of the same trees, that alone cost a third of the canopy's
+        // brightness: 63 of 255 with it, 97 without - the "black trees". Per-
+        // instance colour arrives through USE_INSTANCING_COLOR, which is a
+        // separate define and still applies.
+        vertexColors: false,
         transparent: false,
         alphaTest: 0.42,
         roughness: 0.88,
         metalness: 0,
         side: THREE.DoubleSide,
-      });
+      }), FOLIAGE_WRAP);
     });
   }
 
@@ -291,7 +338,8 @@ export class MaterialLibrary {
       const map = grassBladeTexture();
       return new THREE.MeshStandardMaterial({
         map,
-        vertexColors: true,
+        // Instanced blades, no color attribute - see foliage() above.
+        vertexColors: false,
         transparent: false,
         alphaTest: 0.35,
         roughness: 0.95,

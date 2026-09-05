@@ -25,8 +25,111 @@ export function makeCanvas(w, h) {
   return { canvas: c, ctx: c.getContext('2d') };
 }
 
-function finish(canvas, { repeat = true, aniso = 4, srgb = false, mips = true } = {}) {
-  const tex = new THREE.CanvasTexture(canvas);
+/**
+ * Prepare an alpha-cut mask: bleed its colour outwards, and measure its mean.
+ *
+ * Two jobs, one pass over the pixels, because both need the same ImageData.
+ *
+ * The bleed is the important one. A leaf mask is mostly holes - 51% of the
+ * broadleaf texture is fully transparent - and the canvas leaves those texels
+ * at rgba(0,0,0,0). Alpha is what makes them invisible, but mipmap generation
+ * averages the *colour* channels with no regard for it, so every mip level
+ * mixes leaf green with pure black. By the third or fourth level - which is any
+ * tree more than a few metres away - the canopy has averaged down to near-black
+ * while its alpha stays high enough to survive the alpha test. That is the
+ * flat black cut-out the trees have been rendering as at distance, and no
+ * amount of tinting or relighting could reach it, because the black is inside
+ * the texture. Flooding the leaf colour outwards into the holes leaves alpha
+ * untouched but gives the mipmap filter leaf colour to average with instead of
+ * black.
+ *
+ * The mean is measured over the texels that survive `alphaTest`, ignoring the
+ * holes, so it describes the colour that actually shades. Callers divide their
+ * tint by it - see tintThroughMask in world/build/vegetation.js.
+ */
+function prepareMask(canvas, alphaTest) {
+  const ctx = canvas.getContext('2d');
+  const { width: w, height: h } = canvas;
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const toLinear = (v) => {
+    v /= 255;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+
+  // Mean of what shades, and the flat fill for anything the bleed cannot reach.
+  let lr = 0, lg = 0, lb = 0, sr = 0, sg = 0, sb = 0, n = 0;
+  const solid = new Uint8Array(w * h);
+  for (let i = 0, px = 0; i < d.length; i += 4, px++) {
+    // Canvas hands back un-premultiplied colour, which is quantised to noise
+    // at very low alpha, so near-empty texels are filled rather than trusted.
+    if (d[i + 3] <= 8) continue;
+    solid[px] = 1;
+    if (d[i + 3] / 255 < alphaTest) continue;
+    lr += toLinear(d[i]); lg += toLinear(d[i + 1]); lb += toLinear(d[i + 2]);
+    sr += d[i]; sg += d[i + 1]; sb += d[i + 2]; n++;
+  }
+  if (!n) return { data: d, mean: [1, 1, 1] };
+
+  // Flood the colour outwards one ring per pass. Each pass reads the previous
+  // pass's result so the fill spreads evenly rather than smearing in whichever
+  // direction the loop happens to run.
+  const PASSES = 10;
+  for (let pass = 0; pass < PASSES; pass++) {
+    const filled = solid.slice();
+    let spread = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const px = y * w + x;
+        if (filled[px]) continue;
+        let r = 0, g = 0, b = 0, k = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= w) continue;
+            const q = yy * w + xx;
+            if (!filled[q]) continue;
+            r += d[q * 4]; g += d[q * 4 + 1]; b += d[q * 4 + 2]; k++;
+          }
+        }
+        if (!k) continue;
+        d[px * 4] = r / k; d[px * 4 + 1] = g / k; d[px * 4 + 2] = b / k;
+        solid[px] = 1;                    // alpha deliberately untouched
+        spread++;
+      }
+    }
+    if (!spread) break;
+  }
+
+  // Deep mips average across the whole texture, so anything still black would
+  // still darken them. Give the leftovers the mask's own average colour.
+  const ar = sr / n, ag = sg / n, ab = sb / n;
+  for (let px = 0; px < solid.length; px++) {
+    if (solid[px]) continue;
+    d[px * 4] = ar; d[px * 4 + 1] = ag; d[px * 4 + 2] = ab;
+  }
+
+  // Row 0 of an ImageData is the top of the picture; a texture's first row is
+  // its bottom. Reverse them, the way flipY would for a canvas source.
+  const stride = w * 4;
+  const flipped = new Uint8Array(d.length);
+  for (let y = 0; y < h; y++) {
+    flipped.set(d.subarray(y * stride, (y + 1) * stride), (h - 1 - y) * stride);
+  }
+  return { data: flipped, mean: [lr / n, lg / n, lb / n] };
+}
+
+function finish(canvas, { repeat = true, aniso = 4, srgb = false, mips = true, mask = null } = {}) {
+  let tex;
+  if (mask !== null) {
+    const prepared = prepareMask(canvas, mask);
+    tex = new THREE.DataTexture(prepared.data, canvas.width, canvas.height, THREE.RGBAFormat);
+    tex.userData.maskMean = prepared.mean;
+  } else {
+    tex = new THREE.CanvasTexture(canvas);
+  }
   tex.wrapS = tex.wrapT = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   tex.anisotropy = aniso;
   tex.generateMipmaps = mips;
@@ -89,10 +192,11 @@ const grey = (v) => `rgb(${v | 0},${v | 0},${v | 0})`;
 
 // --- storefront lettering -------------------------------------------------
 
-// One shared atlas can spell every restaurant name in the world without one
-// GPU texture and draw call per business. Non-Latin names retain a readable
-// OSM/Unicode name in the HUD; the compact street sign transliterates what it
-// can and uses '?' for glyphs this deliberately tiny atlas does not contain.
+// One shared atlas spells mapper-provided Latin/English restaurant names
+// without one GPU texture and draw call per business. Non-Latin local names
+// remain intact in the HUD; when no mapped Latin form exists the street sign
+// uses the mapped cuisine/category instead of rendering a row of question
+// marks. We never pretend an automatic transliteration is authoritative.
 export const SIGN_GLYPHS = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&'-.,/+:!?";
 export const SIGN_GLYPH_COLUMNS = 8;
 export const SIGN_GLYPH_ROWS = Math.ceil(SIGN_GLYPHS.length / SIGN_GLYPH_COLUMNS);
@@ -637,7 +741,13 @@ export function roadMarkingTexture(kind = 'dashed') {
     ctx.clearRect(0, 0, S, S * 4);
     ctx.fillStyle = 'rgba(238,236,226,0.92)';
     const cx = S / 2;
-    if (kind === 'dashed') {
+    if (kind === 'lane-dashed') {
+      // The geometry itself is one paint stripe; one texture repeat is eight
+      // metres along the road, with two metres of paint and six of gap.
+      ctx.fillRect(0, 0, S, S);
+    } else if (kind === 'lane-solid') {
+      ctx.fillRect(0, 0, S, S * 4);
+    } else if (kind === 'dashed') {
       for (let y = 0; y < S * 4; y += 96) ctx.fillRect(cx - 4, y, 8, 52);
     } else if (kind === 'solid') {
       ctx.fillRect(cx - 4, 0, 8, S * 4);
@@ -696,7 +806,7 @@ export function barkTexture(kind = 'rough') {
       }
     }
     grain(ctx, S, S, 0.12, 313, 2);
-    return finish(canvas, { srgb: true });
+    return finish(canvas, { srgb: true, mask: 0 });
   });
 }
 
@@ -808,7 +918,7 @@ export function foliageTexture(kind = 'broadleaf') {
              clamp(150 + up * 90 + (rng() - 0.5) * 30, 60, 252));
       }
     }
-    return finish(canvas, { repeat: false, srgb: true });
+    return finish(canvas, { repeat: false, srgb: true, mask: 0.42 });
   });
 }
 
@@ -837,7 +947,7 @@ export function grassBladeTexture() {
       ctx.closePath();
       ctx.fill();
     }
-    return finish(canvas, { repeat: false, srgb: true });
+    return finish(canvas, { repeat: false, srgb: true, mask: 0.35 });
   });
 }
 

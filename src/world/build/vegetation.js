@@ -340,6 +340,27 @@ function mergeGeometries(list) {
   return out;
 }
 
+/**
+ * Rewrite a named albedo as the tint that produces it through a mask.
+ *
+ * Every tinted mask here shades as `tint x mask`, so a tint used raw arrives
+ * darkened by the mask's own mean - and each mask has a different one: 0.21 for
+ * rough bark, 0.78 for birch, 0.65 for broadleaf, 0.54 for needle. They were
+ * being papered over with a single hand-picked multiplier per call site (1.7,
+ * 1.05, 1.25, 1.35), none of which matched, and rough bark was off by nearly
+ * 3x - the trunks measured 22 of 255 at midday. Dividing by the mask's measured
+ * mean makes the division exact for every mask, so the species colours below
+ * can be read as what they are: the albedo of the finished bark or leaf.
+ */
+function tintThroughMask(colour, material) {
+  const mean = material?.map?.userData?.maskMean;
+  if (!mean) return colour;
+  colour.r /= mean[0];
+  colour.g /= mean[1];
+  colour.b /= mean[2];
+  return colour;
+}
+
 function trunkGeometry() {
   if (geometryCache.has('trunk')) return geometryCache.get('trunk');
   // Tapered, open-ended: the top is always hidden inside the canopy.
@@ -524,13 +545,10 @@ export function buildTreeInstances(trees, ctx, group, collide) {
       scl.set(t.trunkRadius * 2, trunkH, t.trunkRadius * 2);
       m.compose(pos, q, scl);
       trunk.setMatrixAt(i, m);
-      // The bark texture is a greyscale mask averaging about half brightness,
-      // so a tint used raw comes out at half the colour it names: rough bark at
-      // 0x6b5744 landed around RGB 48, which is why trunks read as black
-      // sticks. Pre-divide by the mask's mean so tint x mask lands on the
-      // colour the tint actually names.
-      trunkColour.setHex(sp.bark === 'birch' ? 0xd8d2c4 : 0x6b5744)
-                 .multiplyScalar(sp.bark === 'birch' ? 1.05 : 1.7);
+      // Bark albedo, not the colour bark photographs as - the mask division
+      // and the lighting supply the rest.
+      trunkColour.setHex(sp.bark === 'birch' ? 0xd8d2c4 : 0x6b5744);
+      tintThroughMask(trunkColour, trunkMat);
       trunk.setColorAt(i, trunkColour);
 
       const crownH = t.height * sp.crown;
@@ -543,10 +561,8 @@ export function buildTreeInstances(trees, ctx, group, collide) {
       scl.set(t.spread * 2 * wide, crownH * (sp.shape === 'conical' ? 1.15 : 1), t.spread * 2 * wide);
       m.compose(pos, q, scl);
       canopy.setMatrixAt(i, m);
-      // Same correction as the trunk: the leaf mask averages roughly 0.63 of
-      // full brightness, and the species colours were chosen as finished
-      // greens rather than albedos to be modulated by one.
-      canopyColour.copy(t.colour).multiplyScalar(1.25);
+      canopyColour.copy(t.colour);
+      tintThroughMask(canopyColour, canopyMat);
       canopy.setColorAt(i, canopyColour);
 
       if (collide && t.trunkRadius > 0.12) {
@@ -666,8 +682,8 @@ export class GroundCover {
         this.mesh.setMatrixAt(n, m);
         // Blades stand up into the light, so they read brighter than the flat
         // ground they grow out of rather than the same shade.
-        colour.copy(info.colour).multiplyScalar(1.35)
-              .offsetHSL(0, rng() * 0.1 - 0.05, rng() * 0.1 - 0.04);
+        colour.copy(info.colour).offsetHSL(0, rng() * 0.1 - 0.05, rng() * 0.1 - 0.04);
+        tintThroughMask(colour, this.mesh.material);
         this.mesh.setColorAt(n, colour);
         n++;
       }
