@@ -532,13 +532,13 @@ export function roofSpec(tags, cls, hints = {}) {
  * fixed 3.2 m, so a 12-storey block with 3 m floors gets twelve rows of
  * windows instead of eleven and a bit.
  */
-function facadeRhythm(cls, floorH, rng) {
+function facadeRhythm(cls, floorH, rng = () => 0.5) {
   const wide = cls && (cls.kind === 'office' || cls.kind === 'retail' || cls.kind === 'industrial');
   const bay = wide ? 3.6 + rng() * 1.5 : 2.9 + rng() * 1.1;
   return { bay, floorH: clamp(floorH || (cls && cls.floorH) || 3.2, 2.4, 5.5) };
 }
 
-export function facadeSpec(tags, cls, rng, floorH) {
+export function facadeSpec(tags, cls, rng = () => 0.5, floorH) {
   const material = lookupMaterial(tags['building:material'] || tags['material'] ||
                                   tags['building:facade:material'] || tags['wall']);
   let colour = parseColour(tags['building:colour'] || tags['building:color'] ||

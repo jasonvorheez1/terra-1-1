@@ -8,6 +8,7 @@ import { overtureBuildings, overturePlaces } from '../src/geo/overture.js';
 import {
   extractFeatures, mergeOvertureBuildings, mergeOvertureRestaurantPlaces,
   inferMissingHeights, inferBuildingKinds, assignEntrances, assignRestaurantBusinesses,
+  inferCommercialSites,
 } from '../src/world/features.js';
 import {
   restaurantSignLabel, restaurantStorefrontStyle,
@@ -86,10 +87,11 @@ for (const place of PLACES) {
   const fs = extractFeatures(osm, projection);
   const footprints = mergeOvertureBuildings(fs, buildingRecords, projection);
   const placeMerge = mergeOvertureRestaurantPlaces(fs, placeRecords, projection);
-  inferMissingHeights(fs);
-  inferBuildingKinds(fs);
-  assignEntrances(fs);
   const assigned = assignRestaurantBusinesses(fs);
+  inferBuildingKinds(fs);
+  inferMissingHeights(fs);
+  assignEntrances(fs);
+  const commercialSites = inferCommercialSites(fs);
   const buildings = fs.buildings.filter((b) => b.restaurant);
   const named = buildings.filter((b) => b.restaurant.name);
   const mediaRefs = buildings.filter((b) => {
@@ -112,7 +114,8 @@ for (const place of PLACES) {
   totalMediaRefs += mediaRefs.length;
   console.log(`  ok  ${place.name}: ${assigned} restaurant buildings, ${named.length} named, ` +
               `${mediaRefs.length} media-linked; Overture added ${placeMerge.added} places / ` +
-              `${footprints.added} footprints${osmResult.status === 'rejected' ? ' (OSM fallback exercised)' : ''}`);
+              `${footprints.added} footprints; ${commercialSites.sites} auto-oriented sites` +
+              `${osmResult.status === 'rejected' ? ' (OSM fallback exercised)' : ''}`);
   console.log(`      ${named.slice(0, 8).map((b) => b.restaurant.name).join(' · ')}`);
 }
 
