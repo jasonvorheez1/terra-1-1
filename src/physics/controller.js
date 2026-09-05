@@ -46,7 +46,21 @@ export class CharacterController {
     this.pitch = 0;
 
     this.gravity = -19.6;          // heavier than reality; games always are
-    this.jumpSpeed = 5.0;
+    this.jumpSpeed = 5.0;          // 0.64 m standing, about a real one
+    // Coming down faster than you went up. Symmetric gravity is what makes a
+    // jump feel like it is happening underwater: the rise reads fine and then
+    // you hang. Every platformer that feels good does this, and the number is
+    // small enough here that it never reads as being yanked down.
+    this.fallGravityScale = 1.5;
+    // Releasing the key on the way up cuts the jump short, so a tap is a hop
+    // and a hold is the full arc. Without it every jump is the same height and
+    // the button may as well be a trigger.
+    this.jumpCut = 0.45;
+    // A world made of one-metre cubes needs one-metre legs. Scales rather than
+    // separate numbers, so the settings screen stays the one place that owns
+    // step height and a settings change cannot quietly undo the mode.
+    this.jumpScale = 1;
+    this.stepScale = 1;
     this.airControl = 0.32;
     // How quickly horizontal velocity chases what you asked for. See the
     // note at the damp() call: these are the difference between walking
@@ -58,6 +72,8 @@ export class CharacterController {
 
     this.coyoteTime = 0;
     this.jumpBuffer = 0;
+    this.jumping = false;          // rising from a jump we can still cut short
+    this.jumpedThisStep = false;   // read by the stamina cost, cleared each step
     this.distanceWalked = 0;
     this.lastStepDistance = 0;
     this.landingImpact = 0;
@@ -78,7 +94,7 @@ export class CharacterController {
 
   applySettings() {
     const gp = this.settings.gameplay;
-    this.stepHeight = gp.autoStep;
+    this.stepHeight = gp.autoStep * this.stepScale;
     this.maxSlope = Math.cos(gp.slopeLimit * Math.PI / 180);
   }
 
@@ -236,16 +252,32 @@ export class CharacterController {
     this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
 
     // --- vertical ----------------------------------------------------------
+    this.jumpedThisStep = false;
     this.coyoteTime = this.grounded ? 0.12 : Math.max(0, this.coyoteTime - dt);
     this.jumpBuffer = wish.jump ? 0.15 : Math.max(0, this.jumpBuffer - dt);
     if (this.jumpBuffer > 0 && this.coyoteTime > 0 && gp.jump) {
-      this.velocity.y = this.jumpSpeed;
+      // `jumpPower` is how much of a jump you have left in you; the stamina
+      // system hands it down so being winded shortens the leap rather than
+      // taking it away, which reads as tired instead of as broken.
+      this.velocity.y = this.jumpSpeed * this.jumpScale *
+        (wish.jumpPower === undefined ? 1 : wish.jumpPower);
       this.grounded = false;
       this.coyoteTime = 0;
       this.jumpBuffer = 0;
+      this.jumping = true;
+      this.jumpedThisStep = true;
     }
+    // Let go early and the rest of the rise is cut. Only once per jump, and
+    // only while still going up.
+    if (this.jumping && !wish.jumpHeld && this.velocity.y > 0) {
+      this.velocity.y *= this.jumpCut;
+      this.jumping = false;
+    }
+    if (this.velocity.y <= 0 || this.grounded) this.jumping = false;
+
     const buoyancy = this.inWater ? 12 : 0;
-    this.velocity.y += (this.gravity + buoyancy) * dt;
+    const falling = this.velocity.y < 0 && !this.inWater;
+    this.velocity.y += (this.gravity * (falling ? this.fallGravityScale : 1) + buoyancy) * dt;
     if (this.inWater) this.velocity.y = clamp(this.velocity.y, -2.5, 2.5);
     else this.velocity.y = Math.max(this.velocity.y, -55);
 

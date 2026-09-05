@@ -27,6 +27,16 @@ import { VoxelMode } from './voxel/mode.js';
 const FIXED_STEP = 1 / 90;          // physics tick
 const MAX_SUBSTEPS = 6;
 
+// Wind. A full bar is about eleven seconds of flat-out running, which is short
+// enough to be a decision and long enough to cross a street; getting it all
+// back from empty takes seventeen seconds standing still, half again as long
+// if you walk it off.
+const STAMINA_DRAIN = 1 / 11;
+const STAMINA_REGEN = 1 / 17;
+const STAMINA_HOLD = 1.1;           // seconds after a sprint before recovery
+const STAMINA_RECOVERED = 0.34;     // how much you need back before running again
+const JUMP_COST = 0.06;
+
 class Game {
   constructor() {
     this.canvas = document.getElementById('viewport');
@@ -629,7 +639,10 @@ class Game {
     const stamina = this.updateStamina(dt, sprintHeld, move);
     const wish = {
       jump: this.input.wasPressed('jump') || this.input.gamepadPressed(0),
-      sprint: sprintHeld && stamina > 0.02,
+      // Held state as well as the press: releasing early cuts the jump short.
+      jumpHeld: this.input.isDown('jump') || this.input.gamepadButton(0),
+      jumpPower: this.jumpPower(),
+      sprint: sprintHeld && !this.exhausted && stamina > 0.02,
       crouch: this.input.isCrouching(),
       up: this.input.isDown('flyUp'),
       down: this.input.isDown('flyDown'),
@@ -655,6 +668,13 @@ class Game {
     let steps = 0;
     while (this.accumulator >= FIXED_STEP && steps < MAX_SUBSTEPS) {
       c.step(FIXED_STEP, move, wish);
+      // Leaving the ground costs wind, which is what stops bunny-hopping being
+      // a free way to cross a hillside faster than running up it.
+      if (c.jumpedThisStep && settings.gameplay.stamina) {
+        this.stamina = clamp(this.stamina - JUMP_COST, 0, 1);
+        this.staminaHold = Math.max(this.staminaHold || 0, STAMINA_HOLD * 0.6);
+        if (this.stamina <= 0.001) this.exhausted = true;
+      }
       this.accumulator -= FIXED_STEP;
       steps++;
       wish.jump = false;              // a buffered jump fires once
@@ -834,14 +854,59 @@ class Game {
     });
   }
 
+  /**
+   * Wind, and running out of it.
+   *
+   * The old version drained over twenty-two seconds and refilled while you
+   * were still walking at full pace, so it never once decided anything. Three
+   * changes make it a real constraint: running costs enough to notice, uphill
+   * costs more than flat, and recovery does not begin the instant you stop
+   * sprinting - you have to actually ease off.
+   *
+   * The exhaustion latch is the important one. Cutting sprint off at zero and
+   * restoring it the moment the bar ticks above zero makes the last stretch of
+   * a run stutter between running and walking several times a second. Once you
+   * are spent you stay spent until you have a third of it back.
+   */
   updateStamina(dt, sprinting, move) {
-    if (!settings.gameplay.stamina) { this.stamina = 1; return 1; }
-    if (this.stamina == null) this.stamina = 1;
-    const moving = Math.hypot(move.x, move.y) > 0.1 && this.controller.grounded;
-    if (sprinting && moving) this.stamina -= dt / 22;
-    else this.stamina += dt / 14;
+    if (!settings.gameplay.stamina) {
+      this.stamina = 1;
+      this.exhausted = false;
+      return 1;
+    }
+    if (this.stamina == null) { this.stamina = 1; this.exhausted = false; this.staminaHold = 0; }
+    const c = this.controller;
+    const moving = Math.hypot(move.x, move.y) > 0.1;
+    const running = sprinting && moving && c.grounded && !this.exhausted;
+
+    if (running) {
+      // Ground normal tilts away from vertical on a slope; on a 30 degree
+      // hillside this roughly doubles the cost of running up it.
+      const slope = clamp(1 - c.groundNormal.y, 0, 0.4);
+      this.stamina -= dt * STAMINA_DRAIN * (1 + slope * 3);
+      this.staminaHold = STAMINA_HOLD;
+    } else {
+      this.staminaHold = Math.max(0, (this.staminaHold || 0) - dt);
+      if (this.staminaHold <= 0) {
+        // Standing still gets your breath back; walking it off is slower, and
+        // in the air you are not recovering at all.
+        const rate = !c.grounded ? STAMINA_REGEN * 0.35
+          : (moving ? STAMINA_REGEN * 0.6 : STAMINA_REGEN);
+        this.stamina += dt * rate;
+      }
+    }
+
     this.stamina = clamp(this.stamina, 0, 1);
+    if (this.stamina <= 0.001) this.exhausted = true;
+    else if (this.exhausted && this.stamina >= STAMINA_RECOVERED) this.exhausted = false;
     return this.stamina;
+  }
+
+  /** Take the wind out of a jump, and tell us how high it can be. */
+  jumpPower() {
+    if (!settings.gameplay.stamina) return 1;
+    if (this.exhausted) return 0.72;
+    return this.stamina < JUMP_COST ? 0.72 : 1;
   }
 
   updateCamera(dt, move, sprinting) {
@@ -1078,6 +1143,7 @@ class Game {
       distance: formatDistance(c.distanceWalked),
       heading,
       stamina: settings.gameplay.stamina ? (this.stamina ?? 1) : 1,
+      exhausted: !!this.exhausted,
       prompt,
       lookHint: !this.input.pointerLocked,
       loading: this.world.stats.buildQueue > 0 || netStats.inflight > 0

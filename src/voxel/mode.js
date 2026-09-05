@@ -95,6 +95,14 @@ export class VoxelMode {
 
     world.setVisible(false);
     world.collisionWorld.useLayer('voxel');
+    // Blocks are a metre tall, and a 0.64 m jump with a 0.42 m step cannot get
+    // onto one by either route - you would be walled in by the ground itself.
+    // 1.4x the jump clears a block with room to spare; the step stays below a
+    // full block so climbing one is still a jump you chose to make.
+    const c = game.controller;
+    c.jumpScale = 1.4;
+    c.stepScale = 1.45;
+    c.applySettings();
     this.active = true;
 
     // Build the ground under your feet before handing control back, so you are
@@ -141,6 +149,9 @@ export class VoxelMode {
     game.world.collisionWorld.clear('voxel');
     game.world.collisionWorld.useLayer('world');
     game.world.setVisible(true);
+    game.controller.jumpScale = 1;
+    game.controller.stepScale = 1;
+    game.controller.applySettings();
 
     // Put the player back on the polygon ground, which may sit up to half a
     // block from where the voxel surface was.

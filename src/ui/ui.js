@@ -611,6 +611,9 @@ export class UI {
       wrap.classList.toggle('visible', state.stamina < 0.999);
       el['stamina-bar'].style.width = `${state.stamina * 100}%`;
       el['stamina-bar'].classList.toggle('low', state.stamina < 0.25);
+      // Spent is its own state, not just a low bar: you cannot run again until
+      // it clears, so it has to look different from nearly-empty.
+      el['stamina-bar'].classList.toggle('spent', !!state.exhausted);
     }
 
     if (state.prompt !== undefined) {

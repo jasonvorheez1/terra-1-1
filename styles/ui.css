@@ -464,6 +464,8 @@ output { font-family: var(--mono); font-size: .82rem; color: var(--ink-dim); min
 #stamina-wrap.visible { opacity: 1; }
 #stamina-bar { height: 100%; width: 100%; background: rgba(255,255,255,.8); transition: width .12s linear, background .3s; }
 #stamina-bar.low { background: var(--bad); }
+#stamina-bar.spent { background: var(--bad); animation: stamina-spent 1s ease-in-out infinite; }
+@keyframes stamina-spent { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 #distance-walked { font-family: var(--mono); font-size: .72rem; color: rgba(255,255,255,.45); margin-left: auto; }
 
 #interact-prompt {
