@@ -13,15 +13,14 @@
 import * as THREE from 'three';
 import { colourToLinear, shade, ensureClockwise, MeshAccumulator } from './mesh.js';
 import { surfaceFamily } from '../../gfx/materials.js';
-import {
-  ribbonToRing, bounds, pointInRing, pointInPolygon, orientedBounds,
-} from '../geometry.js';
+import { ribbonToRing, bounds, pointInRing } from '../geometry.js';
 import { fetchCached, decodeImage } from '../../geo/net.js';
 import { lonToTileX, latToTileY, tileXToLon, tileYToLat, zoomForResolution } from '../../geo/projection.js';
 import { makeCanvas } from '../../gfx/textures.js';
 import { clamp, lerp } from '../../core/util.js';
 import { fbm2 } from '../../core/rng.js';
 import { featureRng } from '../osm-tags.js';
+import { parkingBayLayout } from '../road-layout.js';
 import { box } from './props.js';
 import { BIOMES } from '../../geo/nasa.js';
 
@@ -359,49 +358,19 @@ export function buildLandcover(list, ctx, multi, collide) {
 
 /** Procedural bay separators for mapped and inferred surface car parks. */
 export function buildParkingMarkings(lc, ctx, multi, lift = 0.1, collide = null) {
-  const parkingType = String(lc.tags?.parking || '').toLowerCase();
-  if (parkingType === 'underground' || parkingType === 'multi-storey' ||
-      parkingType === 'rooftop' || (lc.area || 0) < 70) return 0;
-
-  // Chunk clipping changes the visible ring but not the orientation of the
-  // real lot. Use the parent where available so rows stay aligned at seams.
+  const bays = parkingBayLayout(lc);
+  if (!bays.length) return 0;
   const whole = lc.__parent || lc;
-  const ob = orientedBounds(whole.ring);
-  let ux = ob.axisX[0], uz = ob.axisX[1], long = ob.width;
-  let vx = ob.axisZ[0], vz = ob.axisZ[1], cross = ob.depth;
-  if (cross > long) {
-    [ux, vx] = [vx, ux];
-    [uz, vz] = [vz, uz];
-    [long, cross] = [cross, long];
-  }
-  if (long < 8 || cross < 6.2) return 0;
-
   const acc = multi.for('markings:parking-bays', ctx.materials.markings('lane-solid'));
   const carAcc = multi.for('solid', ctx.materials.solid({ roughness: 0.76 }));
-  const halfLong = long / 2;
-  const halfCross = cross / 2;
-  const rows = cross >= 17
-    ? [{ edge: -halfCross + 0.45, dir: 1 }, { edge: halfCross - 0.45, dir: -1 }]
-    : [{ edge: -halfCross + 0.45, dir: 1 }];
-  const stall = 2.7;
-  const depth = Math.min(5.1, cross - 1.1);
   let count = 0;
   let cars = 0;
   const maxCars = ctx.detail === 'high' ? 42 : 18;
   const propDensity = ctx.settings?.graphics?.propDensity ?? 1;
   const occupancy = clamp(0.22 * propDensity, 0.04, 0.48);
 
-  for (const row of rows) {
-    for (let u = -halfLong + stall; u <= halfLong - stall * 0.55; u += stall) {
-      const ax = ob.cx + ux * u + vx * row.edge;
-      const az = ob.cz + uz * u + vz * row.edge;
-      const bx = ax + vx * depth * row.dir;
-      const bz = az + vz * depth * row.dir;
-      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
-      // Mark only the currently visible/clipped polygon and avoid holes.
-      if (!pointInPolygon(lc.ring, lc.holes || [], mx, mz) ||
-          !pointInPolygon(whole.ring, whole.holes || [], ax, az) ||
-          !pointInPolygon(whole.ring, whole.holes || [], bx, bz)) continue;
+  for (const bay of bays) {
+      const { ax, az, bx, bz, ux, uz } = bay;
       const y0 = ctx.terrainAt(ax, az) + lift;
       const y1 = ctx.terrainAt(bx, bz) + lift;
       const hw = 0.055;
@@ -418,24 +387,13 @@ export function buildParkingMarkings(lc, ctx, multi, lift = 0.1, collide = null)
       // silhouettes restore scale and the actual use of the site without
       // pretending to know an exact live car inventory.
       if (cars >= maxCars) continue;
-      const bayIndex = Math.round((u + halfLong) / stall);
-      const rowIndex = row.dir > 0 ? 0 : 1;
-      const rng = featureRng('parked-car', `${whole.id}:${rowIndex}:${bayIndex}`);
+      const rng = featureRng('parked-car', `${whole.id}:${bay.rowIndex}:${bay.bayIndex}`);
       if (rng() >= occupancy) continue;
-      const cu = u - stall * 0.5;
-      const cv = row.edge + row.dir * Math.min(2.75, depth * 0.55);
-      const cx = ob.cx + ux * cu + vx * cv;
-      const cz = ob.cz + uz * cu + vz * cv;
-      const noseX = cx + vx * row.dir * 1.8;
-      const noseZ = cz + vz * row.dir * 1.8;
-      const tailX = cx - vx * row.dir * 1.8;
-      const tailZ = cz - vz * row.dir * 1.8;
-      if (!pointInPolygon(lc.ring, lc.holes || [], cx, cz) ||
-          !pointInPolygon(whole.ring, whole.holes || [], noseX, noseZ) ||
-          !pointInPolygon(whole.ring, whole.holes || [], tailX, tailZ)) continue;
-      addParkedCar(carAcc, collide, ctx, cx, cz, vx * row.dir, vz * row.dir, rng);
+      addParkedCar(
+        carAcc, collide, ctx,
+        bay.car.x, bay.car.z, bay.car.dx, bay.car.dz, rng,
+      );
       cars++;
-    }
   }
   return count;
 }

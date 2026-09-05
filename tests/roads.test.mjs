@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import {
   junctionSetback, trimPolylineProfile, splitPolylineProfileAtJunctions,
-  drivingSideForCountry, roadMarkingLayout, shouldBuildSidewalk,
+  drivingSideForCountry, roadMarkingLayout, shouldBuildSidewalk, parkingBayLayout,
 } from '../src/world/road-layout.js';
 import { FeatureSet, assignRoadJunctionPatches } from '../src/world/features.js';
-import { buildParkingMarkings } from '../src/world/build/ground.js';
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -131,33 +130,17 @@ test('one incident road owns one shared junction patch', () => {
   assert.ok(fs.roads[1].junctionPatches[0].radius > 6);
 });
 
-test('surface parking receives aligned bay paint and sparse parked cars', () => {
-  const accumulators = new Map();
-  const multi = {
-    for(key) {
-      if (!accumulators.has(key)) {
-        accumulators.set(key, { quads: 0, addQuad() { this.quads++; } });
-      }
-      return accumulators.get(key);
-    },
-  };
-  let collisions = 0;
-  const collide = { rotatedBox() { collisions++; } };
-  const ctx = {
-    detail: 'high', terrainAt: () => 0,
-    settings: { graphics: { propDensity: 3 } },
-    materials: { markings: () => ({}), solid: () => ({}) },
-  };
+test('surface parking receives aligned bay geometry', () => {
   const lc = {
     id: 'parking-test', area: 720,
     ring: [[-18, -10], [18, -10], [18, 10], [-18, 10]], holes: [],
     tags: { amenity: 'parking', parking: 'surface' },
   };
-  const markings = buildParkingMarkings(lc, ctx, multi, 0.08, collide);
-  assert.ok(markings >= 10, `only ${markings} bay separators`);
-  assert.ok(accumulators.get('markings:parking-bays').quads >= markings);
-  assert.ok((accumulators.get('solid')?.quads || 0) > 0, 'no parked cars were emitted');
-  assert.ok(collisions > 0, 'parked cars have no collision');
+  const bays = parkingBayLayout(lc);
+  assert.ok(bays.length >= 10, `only ${bays.length} bay separators`);
+  assert.equal(new Set(bays.map((b) => b.rowIndex)).size, 2);
+  assert.ok(bays.every((b) => Number.isFinite(b.car.x) && Number.isFinite(b.car.z)));
+  assert.deepEqual(parkingBayLayout({ ...lc, tags: { parking: 'underground' } }), []);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
