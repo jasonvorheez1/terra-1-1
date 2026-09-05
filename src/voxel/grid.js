@@ -170,7 +170,7 @@ export class VoxelGrid {
           const depth = topJ - j;
           if (depth === 0) id = col.surface;
           else if (depth <= col.soilDepth) id = col.soil;
-          else id = 1;                                  // stone
+          else id = s.oreAt(bx, this.baseY + j, bz, depth) || 1;   // stone, or a seam in it
           data[IDX(lx, j, lz)] = id;
         }
         empty = false;
@@ -238,6 +238,14 @@ export class VoxelGrid {
   dispose() {
     this.chunks.clear();
   }
+}
+
+/** Deterministic 3D hash, for ore veins. */
+export function hash3(x, y, z, salt = 0) {
+  let h = (x | 0) * 374761393 + (y | 0) * 1103515245 + (z | 0) * 668265263 + salt * 2246822519;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
 /** Deterministic hash for scattering, so a chunk regenerates identically. */

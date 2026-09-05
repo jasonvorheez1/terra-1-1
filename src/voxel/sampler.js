@@ -5,13 +5,33 @@
 // terrain is the same landscape rather than a lookalike generated from noise.
 
 import { pointInRing, bounds } from '../world/geometry.js';
-import { CHUNK, hash2 } from './grid.js';
+import { CHUNK, hash2, hash3 } from './grid.js';
 
 const STONE = 1, DIRT = 2, GRASS = 3, SAND = 4, GRAVEL = 5, SNOW = 6;
 const WOOD = 7, LEAVES = 8, PLANKS = 9, COBBLE = 10, BRICK = 11, GLASS = 12;
 const CONCRETE = 14, ASPHALT = 15, CLAY = 16;
 
 const TREE_CELL = 5;                 // metres between candidate trunks
+
+const COAL = 17, IRON = 18, COPPER = 19, GOLD = 20;
+
+/**
+ * Where each ore lives, and how much of it there is.
+ *
+ * `from` and `to` are metres below the surface rather than absolute height, so
+ * a seam follows the terrain: dig into the side of a hill and you find the
+ * same coal you would have found straight down. `rate` is the chance a
+ * four-metre cell holds a vein at all; `fill` is how solidly that cell fills
+ * in. Two numbers rather than one, so ore comes in pockets you can follow
+ * instead of single blocks dusted through the rock.
+ */
+const ORES = [
+  { id: COAL,   from: 5,  to: 90,  rate: 0.055, fill: 0.42, salt: 71 },
+  { id: COPPER, from: 12, to: 90,  rate: 0.030, fill: 0.36, salt: 73 },
+  { id: IRON,   from: 20, to: 110, rate: 0.026, fill: 0.34, salt: 79 },
+  { id: GOLD,   from: 46, to: 130, rate: 0.011, fill: 0.28, salt: 83 },
+];
+const ORE_CELL = 4;
 
 /**
  * Ground cover for a biome, before slope and altitude have their say.
@@ -95,6 +115,25 @@ export class TerrainSampler {
     }
 
     return { height: h, surface, soil, soilDepth, waterY, building, slope };
+  }
+
+  /**
+   * The ore, if any, in a block of stone this far below the surface.
+   *
+   * Called for every stone block generated, so it has to be cheap: two hashes
+   * and no allocation. The vein hash is on the cell and the fill hash on the
+   * block, which is what makes a pocket rather than a dusting.
+   */
+  oreAt(bx, by, bz, depth) {
+    for (let i = 0; i < ORES.length; i++) {
+      const o = ORES[i];
+      if (depth < o.from || depth > o.to) continue;
+      const cx = Math.floor(bx / ORE_CELL), cy = Math.floor(by / ORE_CELL), cz = Math.floor(bz / ORE_CELL);
+      if (hash3(cx, cy, cz, o.salt) > o.rate) continue;
+      if (hash3(bx, by, bz, o.salt + 1) > o.fill) continue;
+      return o.id;
+    }
+    return 0;
   }
 
   /**

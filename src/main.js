@@ -218,7 +218,10 @@ class Game {
       // Losing lock is Escape, which should pause. Never having had it means
       // the browser refused the request, and pausing then just traps you in
       // a menu you cannot leave.
-      if (this.hadPointerLock && this.state === 'playing' && !this.photoMode) this.pause();
+      // Voxel mode's crafting screen gives the pointer back deliberately so
+      // you can click a recipe; pausing on top of it would close it again.
+      if (this.hadPointerLock && this.state === 'playing' && !this.photoMode &&
+          !(this.voxel && this.voxel.craftOpen)) this.pause();
     };
 
     this.canvas.addEventListener('click', () => {

@@ -495,7 +495,8 @@ export class UI {
       forward: 'Walk forward', back: 'Walk back', left: 'Step left', right: 'Step right',
       jump: 'Jump', sprint: 'Run', crouch: 'Crouch', interact: 'Interact / open door',
       map: 'Map', photo: 'Photo mode', flyUp: 'Fly up', flyDown: 'Fly down',
-      toggleHud: 'Hide interface', voxel: 'Voxel mode', pause: 'Pause',
+      toggleHud: 'Hide interface', voxel: 'Voxel mode',
+      craft: 'Craft / inventory', creative: 'Creative toggle', pause: 'Pause',
     };
     const body = this.el['bindings-body'];
     body.innerHTML = '';

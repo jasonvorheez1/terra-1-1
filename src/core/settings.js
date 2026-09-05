@@ -246,6 +246,8 @@ export const DEFAULT_BINDINGS = {
   flyDown:   ['KeyF'],
   toggleHud: ['KeyH'],
   voxel:     ['KeyV'],
+  craft:     ['Tab', 'KeyQ'],
+  creative:  ['KeyG'],
   pause:     ['Escape'],
 };
 
