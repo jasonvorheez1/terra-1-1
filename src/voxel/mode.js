@@ -100,7 +100,7 @@ export class VoxelMode {
     // Build the ground under your feet before handing control back, so you are
     // never standing on nothing for the frame it takes to mesh.
     this.streamChunks(p.x, p.z, Infinity, 2);
-    const surface = this.grid.surfaceY(Math.floor(p.x), Math.floor(p.z));
+    const surface = this.grid.surfaceY(Math.floor(p.x), Math.floor(p.z), { standable: true });
     game.controller.teleport(Math.floor(p.x) + 0.5,
       (surface === null ? p.y : surface + 2.2), Math.floor(p.z) + 0.5);
 

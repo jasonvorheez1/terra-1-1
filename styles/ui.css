@@ -312,6 +312,21 @@ output { font-family: var(--mono); font-size: .82rem; color: var(--ink-dim); min
 
 /* --------------------------------------------------------------- settings */
 
+.mode-pick { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: 0 0 1rem; }
+.mode {
+  display: flex; flex-direction: column; gap: .3rem; text-align: left;
+  padding: .8rem .9rem; border-radius: 8px; background: var(--paper-2);
+  border: 1px solid var(--line); color: var(--ink-dim); cursor: pointer;
+}
+.mode:hover { background: var(--paper-3); color: var(--ink); }
+.mode.active {
+  border-color: var(--accent); color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--paper-2));
+}
+.mode-name { font-weight: 600; font-size: .98rem; }
+.mode-note { font-size: .8rem; line-height: 1.35; opacity: .78; }
+@media (max-width: 560px) { .mode-pick { grid-template-columns: 1fr; } }
+
 .tabs { display: flex; gap: 2px; padding: .6rem 1.3rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .tab {
   padding: .55rem .95rem; border: none; background: transparent;

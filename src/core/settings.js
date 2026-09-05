@@ -79,6 +79,9 @@ export const DEFAULTS = {
     collision: true,
     autoStep: 0.42,             // maximum kerb/stair height you walk up
     slopeLimit: 52,             // degrees
+    // Which game the title screen starts: 'walk' or 'voxel'. Remembered so
+    // the menu comes back offering whichever you played last.
+    startMode: 'walk',
     compass: true,
     hudOpacity: 0.9,
     crosshair: true,

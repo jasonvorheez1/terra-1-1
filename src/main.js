@@ -360,6 +360,9 @@ class Game {
     this.ui.setLoading(0, 'Contacting map servers…', `Travelling to ${place.name || 'your point'}`);
 
     this.interiors.clear();
+    // Travelling out of a voxel session drops its blocks: the grid is anchored
+    // to the local metre grid of the place you were in, and that origin moves.
+    if (this.voxel.active) this.voxel.exit();
     this.loadAbort = { cancelled: false };
     const abort = this.loadAbort;
 
@@ -375,6 +378,7 @@ class Game {
         startedAt: performance.now(),
         timeMode: options.timeMode,
         fixedHour: options.fixedHour,
+        mode: options.mode === 'voxel' ? 'voxel' : 'walk',
         baseDate,
         elapsed: 0,
       };
@@ -442,6 +446,13 @@ class Game {
         }).catch(() => {});
       }
 
+      // Build the block world while the loading screen is still up, rather
+      // than dropping you into the polygon one for the half second it takes.
+      if (this.session.mode === 'voxel') {
+        this.ui.setLoading(0.95, 'Cutting the world into blocks…');
+        this.voxel.enter();
+      }
+
       this.ui.setLoading(1, 'Ready');
       if (abort.cancelled) return;
       this.startPlaying();
@@ -501,6 +512,7 @@ class Game {
   }
 
   quitToTitle() {
+    if (this.voxel.active) this.voxel.exit();
     this.state = 'title';
     this.input.setEnabled(false);
     this.input.exitPointerLock();

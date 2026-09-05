@@ -8,6 +8,8 @@
 
 import { AIR, BLOCKS, isSolid } from './blocks.js';
 
+const WOOD = 7, LEAVES = 8;
+
 export const CHUNK = 16;              // blocks across, in x and z
 
 /**
@@ -129,13 +131,22 @@ export class VoxelGrid {
     return touched;
   }
 
-  /** Highest solid block in a column, or null if the column is empty. */
-  surfaceY(x, z) {
+  /**
+   * Highest solid block in a column, or null if the column is empty.
+   *
+   * `standable` skips the canopy. Leaves are solid - you can walk along a
+   * branch - but the highest solid block in a wood is a leaf five metres up,
+   * so spawning on "the surface" without this drops you into a treetop.
+   */
+  surfaceY(x, z, { standable = false } = {}) {
     const c = this.chunks.get(chunkKey(chunkOf(x), chunkOf(z)));
     if (!c || !c.generated) return null;
     const lx = x - c.cx * CHUNK, lz = z - c.cz * CHUNK;
     for (let j = HEIGHT - 1; j >= 0; j--) {
-      if (isSolid(c.get(lx, j, lz))) return this.baseY + j;
+      const id = c.get(lx, j, lz);
+      if (!isSolid(id)) continue;
+      if (standable && (id === LEAVES || id === WOOD)) continue;
+      return this.baseY + j;
     }
     return null;
   }

@@ -55,6 +55,7 @@ export class UI {
       'distance-walked', 'interact-prompt', 'toast-stack', 'loading-pip', 'loading-pip-text',
       'title-menu', 'btn-resume', 'place-query', 'place-results', 'preset-list', 'minimap',
       'map-pin', 'place-info', 'btn-start', 'opt-time', 'opt-hour', 'opt-hour-out',
+      'mode-pick', 'btn-choose-place', 'opt-mode',
       'opt-hour-field', 'opt-date', 'opt-weather', 'settings-tabs', 'settings-body',
       'bindings-body', 'btn-reset-settings', 'btn-reset-bindings', 'loading-title',
       'loading-bar', 'loading-detail', 'loading-tip', 'btn-cancel-load', 'pause-summary',
@@ -111,6 +112,16 @@ export class UI {
       const action = btn.dataset.action;
       this.handleAction(action);
     });
+
+    // Which game you are starting is picked before where you are starting it,
+    // on the title screen, and can still be changed on the place picker.
+    for (const card of this.el['mode-pick'].querySelectorAll('button[data-mode]')) {
+      card.addEventListener('click', () => this.setStartMode(card.dataset.mode));
+    }
+    this.el['opt-mode'].addEventListener('change', () => {
+      this.setStartMode(this.el['opt-mode'].value);
+    });
+    this.setStartMode(this.settings.gameplay.startMode || 'walk');
 
     this.el['btn-reset-settings'].addEventListener('click', () => {
       if (!confirm('Reset every setting and key binding to its default?')) return;
@@ -311,6 +322,29 @@ export class UI {
     });
   }
 
+  /**
+   * Choose the game, on both screens at once.
+   *
+   * The title cards and the picker's dropdown are two views of one choice, so
+   * setting it anywhere updates the other and relabels the buttons that act on
+   * it - a menu that says "Start walking" when you asked to build is the kind
+   * of thing you only notice once you are already standing in the wrong world.
+   */
+  setStartMode(mode) {
+    const value = mode === 'voxel' ? 'voxel' : 'walk';
+    this.settings.values.gameplay.startMode = value;
+    this.settings.save();
+
+    for (const card of this.el['mode-pick'].querySelectorAll('button[data-mode]')) {
+      card.classList.toggle('active', card.dataset.mode === value);
+    }
+    if (this.el['opt-mode'].value !== value) this.el['opt-mode'].value = value;
+    this.el['btn-choose-place'].textContent =
+      value === 'voxel' ? 'Choose a place to build' : 'Choose a place to walk';
+    this.el['btn-start'].textContent =
+      value === 'voxel' ? 'Start building' : 'Start walking';
+  }
+
   readStartOptions() {
     const timeMode = this.el['opt-time'].value;
     const dateStr = this.el['opt-date'].value;
@@ -319,6 +353,7 @@ export class UI {
       fixedHour: parseFloat(this.el['opt-hour'].value),
       date: dateStr ? new Date(`${dateStr}T12:00:00Z`) : new Date(),
       weather: this.el['opt-weather'].value,
+      mode: this.el['opt-mode'].value,
     };
   }
 

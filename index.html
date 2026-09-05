@@ -69,8 +69,18 @@
     <div class="title-block">
       <h1>Terra Ambulate</h1>
       <p class="tagline">Walk anywhere on Earth.</p>
+      <div class="mode-pick" id="mode-pick">
+        <button class="mode" data-mode="walk">
+          <span class="mode-name">Walking simulator</span>
+          <span class="mode-note">The real Earth at 1:1. Streets, buildings, weather, the ground under your feet.</span>
+        </button>
+        <button class="mode" data-mode="voxel">
+          <span class="mode-name">Voxel survival</span>
+          <span class="mode-note">The same Earth in blocks. Mine it, craft tools and weapons, build on it.</span>
+        </button>
+      </div>
       <nav class="menu" id="title-menu">
-        <button data-action="new" class="primary">Choose a place</button>
+        <button data-action="new" class="primary" id="btn-choose-place">Choose a place</button>
         <button data-action="resume" id="btn-resume" hidden>Continue</button>
         <button data-action="random">Take me somewhere</button>
         <button data-action="settings">Settings</button>
@@ -119,6 +129,13 @@
           </div>
 
           <div class="start-options">
+            <label class="field inline">
+              <span>Mode</span>
+              <select id="opt-mode">
+                <option value="walk">Walking simulator</option>
+                <option value="voxel">Voxel survival</option>
+              </select>
+            </label>
             <label class="field inline">
               <span>Time</span>
               <select id="opt-time">
