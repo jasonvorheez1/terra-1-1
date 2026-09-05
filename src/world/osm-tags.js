@@ -172,9 +172,12 @@ export const BUILDING_CLASSES = {
   residential:  { levels: 3, floorH: 3.0, kind: 'apartments', roof: 'flat' },
   dormitory:    { levels: 4, floorH: 3.0, kind: 'apartments', roof: 'flat' },
   hotel:        { levels: 6, floorH: 3.1, kind: 'hotel',      roof: 'flat' },
-  commercial:   { levels: 4, floorH: 3.6, kind: 'office',     roof: 'flat' },
+  // `building=commercial` is a broad shell description, not evidence of an
+  // office tower. Four storeys made every unmeasured suburban shop and clinic
+  // into a mid-rise. A named `office=*` still gets the office class below.
+  commercial:   { levels: 2, floorH: 3.6, kind: 'office',     roof: 'flat' },
   office:       { levels: 6, floorH: 3.6, kind: 'office',     roof: 'flat' },
-  retail:       { levels: 2, floorH: 4.0, kind: 'retail',     roof: 'flat' },
+  retail:       { levels: 1, floorH: 4.0, kind: 'retail',     roof: 'flat' },
   restaurant:   { levels: 1, floorH: 4.0, kind: 'retail',     roof: 'flat' },
   cafe:         { levels: 1, floorH: 3.6, kind: 'retail',     roof: 'flat' },
   fast_food:    { levels: 1, floorH: 3.8, kind: 'retail',     roof: 'flat' },
@@ -250,9 +253,33 @@ export function describesItself(tags) {
 export function buildingClass(tags) {
   const b = tags['building'] && tags['building'] !== 'yes' ? tags['building'] : null;
   const p = tags['building:part'] && tags['building:part'] !== 'yes' ? tags['building:part'] : null;
-  const key = b || p || tags['amenity'] || tags['shop'] || tags['man_made'];
+  const shell = b || p;
+  // `yes`, `commercial` and `retail` describe a broad shell. A use mapped on
+  // that same outline is more specific: this is why a Pizza Hut tagged
+  // building=commercial is a one-storey restaurant instead of a four-storey
+  // office. Specific shells such as apartments, hotel or warehouse still win,
+  // preserving genuine mixed-use buildings with a restaurant on the ground.
+  const broadShell = !shell || shell === 'commercial' || shell === 'retail';
+  if (broadShell) {
+    const amenity = tags['amenity'];
+    if (amenity && BUILDING_CLASSES[amenity]) return BUILDING_CLASSES[amenity];
+    const shop = tags['shop'];
+    if (shop && BUILDING_CLASSES[shop]) return BUILDING_CLASSES[shop];
+    if (shop) return BUILDING_CLASSES.retail;
+    if (tags['office']) return BUILDING_CLASSES.office;
+    if (amenity === 'bank' || amenity === 'clinic' || amenity === 'dentist' ||
+        amenity === 'doctors' || amenity === 'veterinary' || amenity === 'post_office') {
+      return BUILDING_CLASSES.commercial;
+    }
+    if (amenity === 'library' || amenity === 'community_centre' ||
+        amenity === 'townhall' || amenity === 'police' || amenity === 'fire_station') {
+      return BUILDING_CLASSES.civic;
+    }
+  }
+  if (shell && BUILDING_CLASSES[shell]) return BUILDING_CLASSES[shell];
+  const key = tags['amenity'] || tags['shop'] || tags['man_made'];
   if (key && BUILDING_CLASSES[key]) return BUILDING_CLASSES[key];
-  // amenity/shop hints when `building=yes`.
+  // Remaining amenity/shop hints when `building=yes`.
   if (tags['shop']) return BUILDING_CLASSES.retail;
   if (tags['office']) return BUILDING_CLASSES.office;
   if (tags['amenity'] === 'place_of_worship') return BUILDING_CLASSES.church;
@@ -284,7 +311,7 @@ export function buildingHeights(tags, footprintArea, rng) {
   let minHeight = parseLength(tags['min_height']) ?? parseLength(tags['building:min_height']);
   const minLevel = parseCount(tags['building:min_level']) ?? parseCount(tags['min_level']);
 
-  const roof = roofSpec(tags, cls);
+  const roof = roofSpec(tags, cls, { area: footprintArea, levels, rng });
   let roofHeight = parseLength(tags['roof:height']);
 
   // Establish total height from the strongest signal available.
@@ -416,17 +443,68 @@ export function buildingEra(tags) {
 }
 
 /** Roof shape, orientation, colour and material. */
-export function roofSpec(tags, cls) {
+/**
+ * Guess a roof for a building nobody has tagged one on.
+ *
+ * Almost nobody tags `roof:shape`, so falling back to the class default meant
+ * falling back to flat, and a town came out as a field of identical boxes with
+ * twelve unused roof shapes sitting in the renderer. Nothing here is knowledge
+ * about the specific building - it is what the footprint, the height and the
+ * date make likely, which is the same reasoning a person uses looking at a map.
+ *
+ * The rules are about size before type. Tall is flat because above five or six
+ * storeys a pitch is a period feature rather than a default; a big low shed is
+ * flat or sawtoothed because the roof is the cheapest part of it and it shows;
+ * and a small low building is pitched almost everywhere people live. Within
+ * each band the choice varies per building from its own seeded rng, so a
+ * street of identically tagged houses is not a street of identical houses -
+ * but it stays weighted towards the class default, so a terrace still reads as
+ * a terrace.
+ */
+function inferRoofShape(cls, tags, hints) {
+  const area = hints.area || 150;
+  const storeys = hints.levels || (cls && cls.levels) || 2;
+  const kind = (cls && cls.kind) || 'generic';
+  const base = (cls && cls.roof) || 'flat';
+  const pick = hints.rng ? hints.rng() : 0.5;
+  const era = buildingEra(tags);
+
+  if (storeys >= 6) {
+    // A nineteenth century block of this height wore a mansard; a modern one
+    // does not.
+    return (era.period === 'historic' && pick < 0.4) ? 'mansard' : 'flat';
+  }
+
+  if (area > 900 && storeys <= 2) {
+    if (kind === 'industrial' || kind === 'shed' || kind === 'barn') {
+      if (pick < 0.28) return 'sawtooth';
+      if (pick < 0.52) return 'skillion';
+      return 'flat';
+    }
+    return 'flat';
+  }
+
+  if (area < 450 && storeys <= 3) {
+    if (base !== 'flat') {
+      if (pick < 0.54) return base;
+      if (pick < 0.74) return base === 'gabled' ? 'hipped' : 'gabled';
+      if (pick < 0.87) return 'half-hipped';
+      return area < 80 ? 'pyramidal' : 'gambrel';
+    }
+    if (pick < 0.42) return 'gabled';
+    if (pick < 0.66) return 'hipped';
+    if (pick < 0.78) return 'skillion';
+    return 'flat';
+  }
+
+  if (era.period === 'historic') return pick < 0.6 ? 'gabled' : 'mansard';
+  return base;
+}
+
+export function roofSpec(tags, cls, hints = {}) {
   let shape = (tags['roof:shape'] || tags['building:roof:shape'] || '').toLowerCase().replace(/\s+/g, '_');
   if (shape === 'half_hipped') shape = 'half-hipped';
-  if (!ROOF_SHAPES.has(shape)) {
-    shape = (cls && cls.roof) || 'flat';
-    // A building put up before flat roofs were buildable did not have one. The
-    // class default is a guess about the type; the date is evidence about the
-    // building, so it wins where the roof itself is untagged.
-    const era = buildingEra(tags);
-    if (shape === 'flat' && era.period === 'historic') shape = 'gabled';
-  }
+  if (!ROOF_SHAPES.has(shape)) shape = inferRoofShape(cls, tags, hints);
   const orientation = (tags['roof:orientation'] || 'along').toLowerCase();
   const direction = parseCount(tags['roof:direction']);
   const material = lookupMaterial(tags['roof:material']);
@@ -930,10 +1008,13 @@ export const LANDCOVER = {
   'landuse=cemetery':      { tint: 0x5e7a48, veg: 0.3,  z: 3, sound: 'grass', cover: 'grass' },
   'landuse=recreation_ground': { tint: 0x5f8040, veg: 0.2, z: 3, sound: 'grass', cover: 'grass' },
   'landuse=village_green': { tint: 0x5f8040, veg: 0.25, z: 3, sound: 'grass', cover: 'grass' },
-  'landuse=residential':   { tint: 0x8c8577, veg: 0.14, z: 0, sound: 'concrete', cover: 'urban' },
-  'landuse=commercial':    { tint: 0x8a8579, veg: 0.06, z: 0, sound: 'concrete', cover: 'urban' },
-  'landuse=retail':        { tint: 0x8d857a, veg: 0.05, z: 0, sound: 'concrete', cover: 'urban' },
-  'landuse=industrial':    { tint: 0x87837c, veg: 0.03, z: 0, sound: 'concrete', cover: 'urban' },
+  // These are zoning boundaries, not surveyed surfaces. Keep them in the
+  // feature set for morphology and vegetation, but do not paint an entire
+  // neighbourhood with one grey/gravel material.
+  'landuse=residential':   { tint: 0x8c8577, veg: 0.14, z: 0, sound: 'concrete', cover: 'urban', physical: false },
+  'landuse=commercial':    { tint: 0x8a8579, veg: 0.06, z: 0, sound: 'concrete', cover: 'urban', physical: false },
+  'landuse=retail':        { tint: 0x8d857a, veg: 0.05, z: 0, sound: 'concrete', cover: 'urban', physical: false },
+  'landuse=industrial':    { tint: 0x87837c, veg: 0.03, z: 0, sound: 'concrete', cover: 'urban', physical: false },
   'landuse=railway':       { tint: 0x7c7873, veg: 0.05, z: 1, sound: 'gravel', cover: 'bare' },
   'landuse=construction':  { tint: 0x94897a, veg: 0.04, z: 1, sound: 'dirt', cover: 'bare' },
   'landuse=brownfield':    { tint: 0x8a8064, veg: 0.25, z: 1, sound: 'dirt', cover: 'scrub' },
@@ -962,10 +1043,10 @@ export const LANDCOVER = {
   'leisure=common':        { tint: 0x5f8040, veg: 0.3,  z: 3, sound: 'grass', cover: 'grass' },
   'leisure=dog_park':      { tint: 0x5f8040, veg: 0.2,  z: 4, sound: 'grass', cover: 'grass' },
   'leisure=marina':        { tint: 0x476a7e, veg: 0,    z: 4, sound: 'water', cover: 'water' },
-  'amenity=parking':       { tint: 0x6e6c68, veg: 0.02, z: 5, sound: 'concrete', cover: 'paved' },
-  'amenity=school':        { tint: 0x8b8674, veg: 0.12, z: 1, sound: 'concrete', cover: 'urban' },
-  'amenity=university':    { tint: 0x8b8674, veg: 0.18, z: 1, sound: 'concrete', cover: 'urban' },
-  'amenity=hospital':      { tint: 0x8d8a80, veg: 0.1,  z: 1, sound: 'concrete', cover: 'urban' },
+  'amenity=parking':       { tint: 0x55575c, veg: 0.02, z: 5, sound: 'concrete', cover: 'paved', defaultSurface: 'asphalt' },
+  'amenity=school':        { tint: 0x8b8674, veg: 0.12, z: 1, sound: 'concrete', cover: 'urban', physical: false },
+  'amenity=university':    { tint: 0x8b8674, veg: 0.18, z: 1, sound: 'concrete', cover: 'urban', physical: false },
+  'amenity=hospital':      { tint: 0x8d8a80, veg: 0.1,  z: 1, sound: 'concrete', cover: 'urban', physical: false },
   'amenity=grave_yard':    { tint: 0x5e7a48, veg: 0.3,  z: 3, sound: 'grass', cover: 'grass' },
   'amenity=marketplace':   { tint: 0x8d867a, veg: 0.02, z: 5, sound: 'stone', cover: 'paved' },
   'aeroway=apron':         { tint: 0x76736e, veg: 0,    z: 5, sound: 'concrete', cover: 'paved' },
@@ -979,7 +1060,10 @@ export function landcoverSpec(tags) {
     const v = tags[key];
     if (!v) continue;
     const rec = LANDCOVER[`${key}=${v}`];
-    if (rec) return { ...rec, key: `${key}=${v}`, surface: lookupSurface(tags['surface'], rec.sound === 'grass' ? 'grass' : 'ground') };
+    if (rec) {
+      const fallback = rec.defaultSurface || (rec.sound === 'grass' ? 'grass' : 'ground');
+      return { ...rec, key: `${key}=${v}`, surface: lookupSurface(tags['surface'], fallback) };
+    }
   }
   return null;
 }

@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import {
   FeatureSet, restaurantFromTags, assignRestaurantBusinesses,
-  mergeOvertureRestaurantPlaces,
+  mergeOvertureRestaurantPlaces, inferBuildingKinds, assignEntrances,
+  inferCommercialSites,
 } from '../src/world/features.js';
+import {
+  buildingHeights, facadeSpec, featureRng, roadSpec,
+} from '../src/world/osm-tags.js';
 import { Projection } from '../src/geo/projection.js';
 import {
   restaurantSignLabel, restaurantPalette, restaurantFacadeRight,
@@ -22,10 +26,14 @@ function rect(x, z, w, d) {
 }
 
 function building(id, ring, tags = { building: 'yes' }) {
+  const footprint = area(ring);
+  const rng = featureRng('test-building', id);
+  const heights = buildingHeights(tags, footprint, rng);
   return {
     id, source: `way/${id}`, ring, holes: [], tags,
-    area: area(ring), bounds: bounds(ring), centroid: centroid(ring),
-    kind: 'generic', levels: 1,
+    area: footprint, bounds: bounds(ring), centroid: centroid(ring),
+    heights, facade: facadeSpec(tags, heights.cls, rng),
+    kind: heights.cls.kind, levels: heights.levels,
   };
 }
 
@@ -101,6 +109,78 @@ test('a restaurant mapped directly on the building needs no separate POI', () =>
   assert.equal(assignRestaurantBusinesses(fs), 1);
   assert.equal(b.restaurant.name, 'The Blue Plate');
   assert.equal(b.restaurant.mappedOnBuilding, true);
+});
+
+test('a commercial shell mapped as a restaurant becomes a low retail building', () => {
+  const fs = new FeatureSet();
+  const b = building('pizza', rect(0, 0, 14, 12), {
+    building: 'commercial', amenity: 'restaurant', name: 'Pizza Hut',
+  });
+  fs.buildings.push(b);
+  assignRestaurantBusinesses(fs);
+  inferBuildingKinds(fs);
+  assert.equal(b.kind, 'retail');
+  assert.equal(b.levels, 1);
+  assert.ok(b.heights.top <= 5, `restaurant was ${b.heights.top}m tall`);
+  assert.equal(b.commercialForm, 'auto-oriented');
+});
+
+test('a place point gives an isolated generic footprint low commercial massing', () => {
+  const fs = new FeatureSet();
+  const b = building('overture-restaurant', rect(-18, -12, 36, 24));
+  fs.buildings.push(b);
+  fs.pois.push({
+    id: 'place/1', x: 0, z: 0, name: "Homer's Dine In", category: 'restaurant',
+    tags: { amenity: 'restaurant', name: "Homer's Dine In" },
+  });
+  assignRestaurantBusinesses(fs);
+  inferBuildingKinds(fs);
+  assert.equal(b.kind, 'retail');
+  assert.equal(b.levels, 1);
+  assert.equal(b.kindInferred, 'restaurant-place');
+});
+
+test('a restaurant in an explicitly mixed-use building keeps the upper floors', () => {
+  const fs = new FeatureSet();
+  const b = building('mixed', rect(0, 0, 24, 18), {
+    building: 'apartments', 'building:levels': '5',
+  });
+  fs.buildings.push(b);
+  fs.pois.push({
+    id: 'place/2', x: 3, z: 3, name: 'Ground Floor Cafe', category: 'cafe',
+    tags: { amenity: 'cafe', name: 'Ground Floor Cafe' },
+  });
+  assignRestaurantBusinesses(fs);
+  inferBuildingKinds(fs);
+  assert.equal(b.kind, 'apartments');
+  assert.equal(b.levels, 5);
+  assert.equal(b.commercialForm, 'mixed-use');
+});
+
+test('an auto-oriented restaurant gains an asphalt frontage, shrubs and road sign', () => {
+  const fs = new FeatureSet();
+  const b = building('roadside', rect(-8, -6, 16, 12), {
+    building: 'commercial', amenity: 'restaurant', name: 'Roadside Kitchen',
+  });
+  fs.buildings.push(b);
+  const spec = roadSpec({ highway: 'secondary', surface: 'asphalt' });
+  fs.roads.push({
+    id: 'road', source: 'way/road', pts: [[-60, 25], [60, 25]],
+    rawPts: [[-60, 25], [60, 25]], spec, tags: { highway: 'secondary' },
+  });
+  assignRestaurantBusinesses(fs);
+  inferBuildingKinds(fs);
+  assignEntrances(fs);
+  const result = inferCommercialSites(fs);
+  assert.equal(result.sites, 1);
+  assert.equal(result.parking, 1);
+  assert.equal(result.signs, 1);
+  assert.equal(result.shrubs, 2);
+  assert.equal(fs.landcover[0].spec.surface.id, 'asphalt');
+  assert.equal(fs.landcover[0].synthetic, true);
+  assert.ok(b.commercialSite.sign);
+  assert.equal(inferCommercialSites(fs).sites, 0, 'site inference is idempotent');
+  assert.equal(fs.landcover.length, 1);
 });
 
 test('several restaurants in one large block retain separate facade positions', () => {

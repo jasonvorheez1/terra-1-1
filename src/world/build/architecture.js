@@ -69,6 +69,9 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng, multi = n
   if (b.restaurant && door && multi) {
     addRestaurantStorefronts(b, door, ctx, multi, acc, baseY, rng);
   }
+  if (b.restaurant && b.commercialSite?.sign && multi) {
+    addRoadsideRestaurantSign(b, ctx, multi, acc, collide, rng);
+  }
 
   switch (kind) {
     case 'house':
@@ -162,6 +165,55 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng, multi = n
       if (levels >= 3 && footprint > 60) addEaves(outline, acc, wallTopY, 0.22, colour);
       break;
   }
+}
+
+/** Low monument sign for an isolated restaurant's road setback. */
+export function addRoadsideRestaurantSign(b, ctx, multi, solid, collide, rng) {
+  const sign = b.commercialSite?.sign;
+  const restaurant = b.restaurant;
+  if (!sign || !restaurant) return;
+  const label = restaurantSignLabel(restaurant, 15);
+  if (!label) return;
+
+  const palette = restaurantPalette(restaurant, rng);
+  const panel = colourToLinear(palette.panel);
+  const accent = colourToLinear(palette.accent);
+  const masonry = colourToLinear(0x8a6650);
+  const white = colourToLinear(0xffffff);
+  const [ax, az] = restaurantFacadeRight(sign.nx, sign.nz);
+  const angle = Math.atan2(sign.nz, sign.nx);
+  const y = ctx.terrainAt(sign.x, sign.z);
+  const charAspect = 0.62;
+  const charH = clamp(4.15 / Math.max(4, label.length * charAspect), 0.34, 0.58);
+  const charW = charH * charAspect;
+  const boardW = Math.min(4.6, label.length * charW + 0.55);
+  const boardH = Math.max(0.86, charH + 0.34);
+  const boardY = y + 1.42;
+
+  // A masonry plinth and cap keep this from reading as a floating billboard.
+  box(solid, sign.x, y + 0.34, sign.z, 0.62, 0.68, boardW + 0.42, masonry, angle);
+  box(solid, sign.x, boardY, sign.z, 0.24, boardH, boardW, panel, angle);
+  box(solid, sign.x, boardY + boardH / 2 + 0.055, sign.z,
+      0.32, 0.11, boardW + 0.18, accent, angle);
+
+  const textAcc = multi.for('restaurant-sign-text', ctx.materials.restaurantSignText());
+  const textY0 = boardY - charH * 0.46;
+  const textY1 = boardY + charH * 0.46;
+  const face = 0.142;
+  const start = -(label.length * charW) / 2 + charW / 2;
+  for (let i = 0; i < label.length; i++) {
+    if (label[i] === ' ') continue;
+    const t = start + i * charW;
+    const left = t - charW * 0.48, right = t + charW * 0.48;
+    const [u0, v0, u1, v1] = signGlyphUv(label[i]);
+    textAcc.addQuad(
+      [sign.x + sign.nx * face + ax * left, textY0, sign.z + sign.nz * face + az * left],
+      [sign.x + sign.nx * face + ax * right, textY0, sign.z + sign.nz * face + az * right],
+      [sign.x + sign.nx * face + ax * right, textY1, sign.z + sign.nz * face + az * right],
+      [sign.x + sign.nx * face + ax * left, textY1, sign.z + sign.nz * face + az * left],
+      [u0, v0, u1, v1], white);
+  }
+  if (collide) collide.rotatedBox(sign.x, y + 0.9, sign.z, 0.7, 1.8, boardW + 0.5, angle);
 }
 
 /**

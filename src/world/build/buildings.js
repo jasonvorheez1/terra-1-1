@@ -381,6 +381,7 @@ function buildRoof(b, ring, holes, wallTopY, topY, acc, wallAcc, roofColour, wal
     // like a cut-off box, which is most of why flat roofs look wrong.
     if (detail === 'high' && b.levels >= 2 && b.kind !== 'canopy') {
       addParapet(ring, wallAcc, acc, wallTopY, PARAPET_HEIGHT, wallColour, roofColour);
+      addRoofPlant(b, ring, wallTopY, acc, roofColour, rng);
     }
     return;
   }
@@ -428,6 +429,70 @@ function buildRoof(b, ring, holes, wallTopY, topY, acc, wallAcc, roofColour, wal
 }
 
 /** Low wall around a flat roof. */
+/**
+ * The machinery on top of a flat roof.
+ *
+ * A real flat roof is never flat: there is a stair bulkhead, a lift overrun, a
+ * plant room, tanks and ducts, and from the street that clutter is most of what
+ * distinguishes one block from the next. Without it every flat-roofed building
+ * ends in the same clean horizontal line and the skyline reads as a bar chart.
+ *
+ * Everything is placed inside the parapet and tested against the footprint, so
+ * nothing hangs off the edge of an L-shaped block, and it is all driven by the
+ * building's own seeded rng so it is stable between rebuilds.
+ */
+function addRoofPlant(b, ring, roofY, acc, roofColour, rng) {
+  const area = b.area || 200;
+  if (area < 60) return;
+  const bb = bounds(ring);
+  const spanX = bb.maxX - bb.minX, spanZ = bb.maxZ - bb.minZ;
+  if (Math.min(spanX, spanZ) < 6) return;
+
+  // Bigger roofs carry more, but the count is capped: past a certain point
+  // this is scenery, not a simulation of a plant deck.
+  const count = clamp(Math.round(Math.sqrt(area) / 7), 1, 5);
+  const inset = 2.2;
+  const plantColour = shade(roofColour, 0.86);
+  const ductColour = shade(roofColour, 1.12);
+
+  for (let i = 0; i < count; i++) {
+    // Rejection sampling: an L-shaped or Y-shaped footprint has plenty of
+    // bounding box that is not roof.
+    let x = 0, z = 0, ok = false;
+    for (let tries = 0; tries < 12 && !ok; tries++) {
+      x = bb.minX + inset + rng() * Math.max(0.5, spanX - inset * 2);
+      z = bb.minZ + inset + rng() * Math.max(0.5, spanZ - inset * 2);
+      ok = pointInRing(ring, x, z);
+    }
+    if (!ok) continue;
+
+    const roll = rng();
+    if (roll < 0.34) {
+      // Stair or lift head: the tallest thing up there, and the one that
+      // actually changes a silhouette.
+      const w = 2.4 + rng() * 1.8, d = 2.2 + rng() * 1.6, h = 2.4 + rng() * 1.4;
+      box(acc, x, roofY + h / 2, z, w, h, d, plantColour);
+    } else if (roll < 0.62) {
+      // Plant room: wide and low.
+      const w = 3 + rng() * 4, d = 2.4 + rng() * 3, h = 1.2 + rng() * 0.9;
+      box(acc, x, roofY + h / 2, z, w, h, d, plantColour);
+    } else if (roll < 0.85) {
+      // Air handling: a squat unit on a little frame.
+      const w = 1.4 + rng() * 1.2, d = 1.1 + rng() * 0.9, h = 0.8 + rng() * 0.6;
+      box(acc, x, roofY + 0.14 + h / 2, z, w, h, d, ductColour);
+      box(acc, x, roofY + 0.07, z, w * 0.9, 0.14, d * 0.9, plantColour);
+    } else {
+      // Tank on legs, which is the New York silhouette and reads at distance.
+      const r = 1.0 + rng() * 0.7, legs = 1.6 + rng() * 1.2, h = 1.8 + rng() * 1.4;
+      box(acc, x, roofY + legs + h / 2, z, r * 2, h, r * 2, plantColour);
+      const off = r * 0.72;
+      for (const [dx, dz] of [[-off, -off], [off, -off], [-off, off], [off, off]]) {
+        box(acc, x + dx, roofY + legs / 2, z + dz, 0.22, legs, 0.22, plantColour);
+      }
+    }
+  }
+}
+
 function addParapet(ring, wallAcc, roofAcc, y, height, wallColour, capColour) {
   const inner = insetRing(ring, 0.3);
   const tone = shade(wallColour, 0.9);

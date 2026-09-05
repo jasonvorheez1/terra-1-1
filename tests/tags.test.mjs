@@ -112,6 +112,12 @@ test('roof height can never exceed the building', () => {
 
 test('buildingClass falls back through amenity and shop', () => {
   assert.equal(T.buildingClass({ building: 'yes', shop: 'bakery' }).kind, 'retail');
+  assert.equal(T.buildingClass({ building: 'commercial', amenity: 'restaurant' }).kind, 'retail');
+  assert.equal(T.buildingClass({ building: 'commercial', amenity: 'restaurant' }).levels, 1,
+               'a mapped restaurant use beats the broad commercial shell');
+  assert.equal(T.buildingClass({ building: 'retail', shop: 'supermarket' }).levels, 1,
+               'a supermarket does not inherit a generic multi-storey retail default');
+  assert.equal(T.buildingClass({ building: 'yes', amenity: 'bank' }).kind, 'office');
   assert.equal(T.buildingClass({ building: 'yes', amenity: 'place_of_worship' }).kind, 'worship');
   assert.equal(T.buildingClass({ building: 'yes', tourism: 'hotel' }).kind, 'hotel');
   assert.equal(T.buildingClass({ building: 'apartments' }).kind, 'apartments');
@@ -233,9 +239,12 @@ test('land cover resolves and orders overlapping polygons', () => {
   const park = T.landcoverSpec({ leisure: 'park' });
   const resi = T.landcoverSpec({ landuse: 'residential' });
   const pitch = T.landcoverSpec({ leisure: 'pitch' });
+  const parking = T.landcoverSpec({ amenity: 'parking' });
   assert.ok(park.z > resi.z, 'a park draws over a residential block');
   assert.ok(pitch.z > park.z, 'a pitch draws over the park it sits in');
   assert.ok(park.veg > resi.veg, 'parks are planted more densely');
+  assert.equal(resi.physical, false, 'a zoning polygon is not painted as one physical surface');
+  assert.equal(parking.surface.id, 'asphalt', 'an untagged surface car park defaults to asphalt');
   assert.equal(T.landcoverSpec({ building: 'yes' }), null);
 });
 
@@ -328,6 +337,20 @@ test('describesItself separates a named type from building=yes', () => {
   assert.equal(T.describesItself({ building: 'nonsense_value' }), false);
   // A shop in a building=yes is still describing itself.
   assert.equal(T.describesItself({ building: 'yes', shop: 'bakery' }), true);
+  assert.equal(T.describesItself({ building: 'yes', amenity: 'bank' }), true);
+});
+
+test('unmeasured class defaults do not contaminate neighbouring height inference', () => {
+  const fs = { buildings: [
+    fakeBuilding(1, 0, 0, { building: 'commercial' }),
+    fakeBuilding(2, 12, 0, { building: 'commercial' }),
+    fakeBuilding(3, 24, 0, { building: 'commercial' }),
+    fakeBuilding(4, 12, 8, { building: 'yes' }),
+  ] };
+  const gap = fs.buildings[3];
+  const before = gap.heights.levels;
+  assert.equal(inferMissingHeights(fs), 0);
+  assert.equal(gap.heights.levels, before);
 });
 
 test('inference does not fire with too few neighbours', () => {

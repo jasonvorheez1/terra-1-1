@@ -13,12 +13,16 @@
 import * as THREE from 'three';
 import { colourToLinear, shade, ensureClockwise, MeshAccumulator } from './mesh.js';
 import { surfaceFamily } from '../../gfx/materials.js';
-import { ribbonToRing, bounds, pointInRing } from '../geometry.js';
+import {
+  ribbonToRing, bounds, pointInRing, pointInPolygon, orientedBounds,
+} from '../geometry.js';
 import { fetchCached, decodeImage } from '../../geo/net.js';
 import { lonToTileX, latToTileY, tileXToLon, tileYToLat, zoomForResolution } from '../../geo/projection.js';
 import { makeCanvas } from '../../gfx/textures.js';
 import { clamp, lerp } from '../../core/util.js';
 import { fbm2 } from '../../core/rng.js';
+import { featureRng } from '../osm-tags.js';
+import { box } from './props.js';
 import { BIOMES } from '../../geo/nasa.js';
 
 const IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile';
@@ -305,6 +309,7 @@ export function buildLandcover(list, ctx, multi, collide) {
   for (const lc of sorted) {
     try {
       const spec = lc.spec;
+      if (spec.physical === false) continue;                 // zoning, not pavement
       if (spec.cover === 'water') continue;                 // handled separately
       const family = surfaceFamily(spec.surface ? spec.surface.id : 'grass');
       const acc = multi.for(`surface:${family}`, ctx.materials.surface(family));
@@ -343,10 +348,123 @@ export function buildLandcover(list, ctx, multi, collide) {
         // costs a third again and buys almost nothing.
         drape: { tolerance: 0.25, minEdge: 3, maxEdge: 64 },
       });
+      if (spec.key === 'amenity=parking' && ctx.detail !== 'low') {
+        buildParkingMarkings(lc, ctx, multi, lift + 0.018, collide);
+      }
     } catch (e) {
       if (ctx.onError) ctx.onError('landcover', lc.source, e);
     }
   }
+}
+
+/** Procedural bay separators for mapped and inferred surface car parks. */
+export function buildParkingMarkings(lc, ctx, multi, lift = 0.1, collide = null) {
+  const parkingType = String(lc.tags?.parking || '').toLowerCase();
+  if (parkingType === 'underground' || parkingType === 'multi-storey' ||
+      parkingType === 'rooftop' || (lc.area || 0) < 70) return 0;
+
+  // Chunk clipping changes the visible ring but not the orientation of the
+  // real lot. Use the parent where available so rows stay aligned at seams.
+  const whole = lc.__parent || lc;
+  const ob = orientedBounds(whole.ring);
+  let ux = ob.axisX[0], uz = ob.axisX[1], long = ob.width;
+  let vx = ob.axisZ[0], vz = ob.axisZ[1], cross = ob.depth;
+  if (cross > long) {
+    [ux, vx] = [vx, ux];
+    [uz, vz] = [vz, uz];
+    [long, cross] = [cross, long];
+  }
+  if (long < 8 || cross < 6.2) return 0;
+
+  const acc = multi.for('markings:parking-bays', ctx.materials.markings('lane-solid'));
+  const carAcc = multi.for('solid', ctx.materials.solid({ roughness: 0.76 }));
+  const halfLong = long / 2;
+  const halfCross = cross / 2;
+  const rows = cross >= 17
+    ? [{ edge: -halfCross + 0.45, dir: 1 }, { edge: halfCross - 0.45, dir: -1 }]
+    : [{ edge: -halfCross + 0.45, dir: 1 }];
+  const stall = 2.7;
+  const depth = Math.min(5.1, cross - 1.1);
+  let count = 0;
+  let cars = 0;
+  const maxCars = ctx.detail === 'high' ? 42 : 18;
+  const propDensity = ctx.settings?.graphics?.propDensity ?? 1;
+  const occupancy = clamp(0.22 * propDensity, 0.04, 0.48);
+
+  for (const row of rows) {
+    for (let u = -halfLong + stall; u <= halfLong - stall * 0.55; u += stall) {
+      const ax = ob.cx + ux * u + vx * row.edge;
+      const az = ob.cz + uz * u + vz * row.edge;
+      const bx = ax + vx * depth * row.dir;
+      const bz = az + vz * depth * row.dir;
+      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      // Mark only the currently visible/clipped polygon and avoid holes.
+      if (!pointInPolygon(lc.ring, lc.holes || [], mx, mz) ||
+          !pointInPolygon(whole.ring, whole.holes || [], ax, az) ||
+          !pointInPolygon(whole.ring, whole.holes || [], bx, bz)) continue;
+      const y0 = ctx.terrainAt(ax, az) + lift;
+      const y1 = ctx.terrainAt(bx, bz) + lift;
+      const hw = 0.055;
+      acc.addQuad(
+        [ax - ux * hw, y0, az - uz * hw],
+        [bx - ux * hw, y1, bz - uz * hw],
+        [bx + ux * hw, y1, bz + uz * hw],
+        [ax + ux * hw, y0, az + uz * hw],
+        [0, 0, 1, 1], [1, 1, 1]);
+      count++;
+
+      // A deterministic fraction of bays is occupied. Empty asphalt with
+      // perfect paint reads like an abandoned test map; a few simple vehicle
+      // silhouettes restore scale and the actual use of the site without
+      // pretending to know an exact live car inventory.
+      if (cars >= maxCars) continue;
+      const bayIndex = Math.round((u + halfLong) / stall);
+      const rowIndex = row.dir > 0 ? 0 : 1;
+      const rng = featureRng('parked-car', `${whole.id}:${rowIndex}:${bayIndex}`);
+      if (rng() >= occupancy) continue;
+      const cu = u - stall * 0.5;
+      const cv = row.edge + row.dir * Math.min(2.75, depth * 0.55);
+      const cx = ob.cx + ux * cu + vx * cv;
+      const cz = ob.cz + uz * cu + vz * cv;
+      const noseX = cx + vx * row.dir * 1.8;
+      const noseZ = cz + vz * row.dir * 1.8;
+      const tailX = cx - vx * row.dir * 1.8;
+      const tailZ = cz - vz * row.dir * 1.8;
+      if (!pointInPolygon(lc.ring, lc.holes || [], cx, cz) ||
+          !pointInPolygon(whole.ring, whole.holes || [], noseX, noseZ) ||
+          !pointInPolygon(whole.ring, whole.holes || [], tailX, tailZ)) continue;
+      addParkedCar(carAcc, collide, ctx, cx, cz, vx * row.dir, vz * row.dir, rng);
+      cars++;
+    }
+  }
+  return count;
+}
+
+const CAR_COLOURS = [
+  0xe2e1dc, 0xb9bdc0, 0x30343a, 0x666b70, 0x8f2f2b, 0x234b70,
+  0x56705a, 0xb9a36a,
+];
+
+function addParkedCar(acc, collide, ctx, x, z, dx, dz, rng) {
+  const angle = Math.atan2(dz, dx);
+  const y = ctx.terrainAt(x, z) + 0.105;
+  const length = rng.range(3.8, 4.8);
+  const width = rng.range(1.68, 1.92);
+  const colour = colourToLinear(rng.pick(CAR_COLOURS));
+  const dark = colourToLinear(0x252b31);
+  const tyre = colourToLinear(0x17191b);
+  box(acc, x, y + 0.28, z, length, 0.48, width, colour, angle);
+  box(acc, x - dx * 0.18, y + 0.68, z - dz * 0.18,
+      length * 0.48, 0.56, width * 0.82, shade(colour, 1.04), angle);
+  // Dark glass band and two understated wheel/tyre axles are enough to stop
+  // the silhouette reading as a coloured crate at walking distance.
+  box(acc, x - dx * 0.12, y + 0.7, z - dz * 0.12,
+      length * 0.34, 0.38, width * 0.86, dark, angle);
+  for (const along of [-length * 0.3, length * 0.3]) {
+    box(acc, x + dx * along, y + 0.16, z + dz * along,
+        0.24, 0.32, width + 0.06, tyre, angle);
+  }
+  if (collide) collide.rotatedBox(x, y + 0.45, z, length, 0.9, width, angle);
 }
 
 /**

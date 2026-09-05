@@ -1136,7 +1136,112 @@ export function assignRestaurantBusinesses(fs, opts = {}) {
   return assigned;
 }
 
-// --- height inference ------------------------------------------------------
+// --- morphology and height inference --------------------------------------
+
+const BROAD_BUILDING_SHELLS = new Set(['', 'yes', 'commercial', 'retail']);
+
+function hasExplicitBuildingHeight(tags = {}) {
+  return tags.height != null || tags['building:height'] != null ||
+         tags['building:levels'] != null || tags.levels != null;
+}
+
+/** Rebuild only derived geometry metadata; the source tags remain untouched. */
+function applyInferredBuildingClass(b, buildingType, levels = null) {
+  const inferredTags = { ...(b.tags || {}), building: buildingType };
+  if (levels != null && !hasExplicitBuildingHeight(inferredTags)) {
+    inferredTags['building:levels'] = String(levels);
+  }
+  const rng = featureRng('b', b.id);
+  const heights = buildingHeights(inferredTags, b.area, rng);
+  b.heights = heights;
+  b.facade = facadeSpec(inferredTags, heights.cls, rng);
+  b.levels = heights.levels;
+  b.kind = heights.cls.kind;
+}
+
+function parkingNearBuilding(fs, b, maxDistance = 45) {
+  for (const lc of fs.landcover || []) {
+    if (lc.spec?.key !== 'amenity=parking') continue;
+    const bb = lc.bounds || (lc.bounds = bounds(lc.ring));
+    if (b.centroid[0] < bb.minX - maxDistance || b.centroid[0] > bb.maxX + maxDistance ||
+        b.centroid[1] < bb.minZ - maxDistance || b.centroid[1] > bb.maxZ + maxDistance) continue;
+    if (pointInPolygon(lc.ring, lc.holes || [], b.centroid[0], b.centroid[1]) ||
+        distanceToRing(lc.ring, b.centroid[0], b.centroid[1]) <= maxDistance) return lc;
+  }
+  return null;
+}
+
+/** Geometry-only density signal, deliberately independent of country or city. */
+function buildingMorphology(fs, b, radius = 75) {
+  let areaInCircle = b.area;
+  let neighbours = 0;
+  let nearestGap = Infinity;
+  const ownRadius = Math.sqrt(Math.max(1, b.area) / Math.PI);
+  for (const n of fs.buildings) {
+    if (n === b || n.isPart) continue;
+    const dx = n.centroid[0] - b.centroid[0];
+    const dz = n.centroid[1] - b.centroid[1];
+    const d = Math.hypot(dx, dz);
+    const otherRadius = Math.sqrt(Math.max(1, n.area) / Math.PI);
+    nearestGap = Math.min(nearestGap, Math.max(0, d - ownRadius - otherRadius));
+    if (d <= radius + otherRadius) {
+      neighbours++;
+      areaInCircle += Math.min(n.area, Math.PI * otherRadius * otherRadius);
+    }
+  }
+  return {
+    neighbours,
+    nearestGap,
+    coverage: areaInCircle / (Math.PI * radius * radius),
+  };
+}
+
+/**
+ * Let a mapped business use correct an otherwise broad or unknown shell.
+ *
+ * Direct restaurant outlines are strong evidence of a dedicated venue. A
+ * point attached to a footprint is weaker, so it only becomes a one-storey
+ * restaurant where the surrounding geometry reads as an isolated/parked
+ * commercial site. Dense or specifically typed buildings retain their upper
+ * floors and receive only the ground-floor storefront.
+ */
+function inferRestaurantBuilding(fs, b) {
+  if (!b.restaurant || b.isPart) return false;
+  const tags = b.tags || {};
+  const shell = String(tags.building || tags['building:part'] || '').toLowerCase();
+  const broadShell = BROAD_BUILDING_SHELLS.has(shell);
+  if (!broadShell) {
+    b.commercialForm = 'mixed-use';
+    return false;
+  }
+
+  const morphology = buildingMorphology(fs, b);
+  const mappedParking = parkingNearBuilding(fs, b);
+  const direct = !!b.restaurant.mappedOnBuilding || isRestaurantTags(tags);
+  const singleVenue = (b.restaurants?.length || 1) <= 1;
+  const autoOriented = !!mappedParking || morphology.coverage < 0.24 ||
+                       morphology.nearestGap > 7;
+  const dedicated = direct || (singleVenue && autoOriented && b.area <= 1800);
+  const category = RESTAURANT_AMENITIES.has(b.restaurant.category)
+    ? b.restaurant.category : 'restaurant';
+  const beforeKind = b.kind;
+  const beforeLevels = b.levels;
+  const beforeHeight = b.heights?.top;
+
+  // Explicit measured height/storeys always survive. Only the use/facade
+  // changes in that case. Otherwise a dedicated venue gets the common low
+  // commercial massing; larger shared footprints become retail rather than a
+  // residential or office tower.
+  applyInferredBuildingClass(
+    b,
+    dedicated ? category : 'retail',
+    dedicated && !hasExplicitBuildingHeight(tags) ? 1 : null,
+  );
+  b.kindInferred = direct ? 'mapped-restaurant' : 'restaurant-place';
+  b.commercialForm = autoOriented && b.levels <= 2 ? 'auto-oriented' : 'attached';
+  b.morphology = { ...morphology, mappedParking: mappedParking?.source || null };
+  return b.kind !== beforeKind || b.levels !== beforeLevels || b.heights?.top !== beforeHeight;
+}
 
 /**
  * Give untagged buildings the height of their neighbours.
@@ -1171,7 +1276,14 @@ export function assignRestaurantBusinesses(fs, opts = {}) {
  */
 export function inferBuildingKinds(fs, opts = {}) {
   const { minArea = 45, maxArea = 400, maxRoadDistance = 80 } = opts;
-  if (!fs.buildings.length || !fs.roads.length) return 0;
+  if (!fs.buildings.length) return 0;
+
+  let changed = 0;
+  // Business identity is available from both OSM and Overture. Consume it
+  // before the generic-house heuristic, or a restaurant beside a service road
+  // is permanently turned into a house before its sign is attached.
+  for (const b of fs.buildings) if (inferRestaurantBuilding(fs, b)) changed++;
+  if (!fs.roads.length) return changed;
 
   // Points of the kinds of road houses stand on, on a coarse grid so this
   // stays linear - a region holds thousands of buildings and as many ways.
@@ -1188,16 +1300,16 @@ export function inferBuildingKinds(fs, opts = {}) {
       list.push(p);
     }
   }
-  if (!grid.size) return 0;
+  if (!grid.size) return changed;
 
   const maxD2 = maxRoadDistance * maxRoadDistance;
-  let changed = 0;
   for (const b of fs.buildings) {
     if (b.kind !== 'generic' || b.isPart) continue;
     const t = b.tags || {};
     // Anything that states a height, or names itself in any way, is not a guess
     // we are entitled to make.
-    if (t.height || t['building:height'] || t['building:levels'] || t.levels) continue;
+    if (hasExplicitBuildingHeight(t)) continue;
+    if (b.restaurant || b.groundUse === 'restaurant') continue;
     if (describesItself(t)) continue;
     if (b.area < minArea || b.area > maxArea) continue;
 
@@ -1427,12 +1539,14 @@ export function inferMissingHeights(fs, opts = {}) {
 
   for (const b of fs.buildings) {
     const t = b.tags || {};
-    const explicit = t.height || t['building:height'] || t['building:levels'] || t.levels;
-    // A building that names its type is not missing a height - its class
-    // supplies one, and that is a better answer than the median of whatever
-    // happens to stand nearby. Only `building=yes` is genuinely silent.
+    const explicit = hasExplicitBuildingHeight(t);
+    // Only measurements seed a neighbour estimate. A class default is useful
+    // for its own building, but it is not evidence to copy into the next one:
+    // three unmeasured `building=commercial` outlines were enough to turn a
+    // whole suburban block into four-storey towers.
     if (explicit) known.push(b);
-    else if (describesItself(t)) known.push(b);
+    // A named type keeps its own class default but does not become a sample.
+    else if (describesItself(t)) continue;
     // A building we have already guessed at is neither a fact to copy from nor
     // a gap to fill: leave it with the house height its class gave it.
     else if (b.kindInferred) continue;
@@ -1536,13 +1650,26 @@ export function assignEntrances(fs, opts = {}) {
     if (b.doors && b.doors.length) {
       b.doors.sort((p, q) => p.rank - q.rank);
       b.door = b.doors[0];
+      const target = nearestRoadPoint(fs.roads, b.door.x, b.door.z, maxRoadDistance);
+      if (target) {
+        b.door.roadX = target.x;
+        b.door.roadZ = target.z;
+        b.door.roadDistance = target.distance;
+        b.door.road = target.road;
+      }
       continue;
     }
     const target = nearestRoadPoint(fs.roads, b.centroid[0], b.centroid[1], maxRoadDistance);
-    const aim = target || [b.centroid[0], b.centroid[1] + 1000];
+    const aim = target ? [target.x, target.z] : [b.centroid[0], b.centroid[1] + 1000];
     const door = doorOnRing(b.ring, b.centroid, aim);
     if (door) {
       b.door = { ...door, rank: 3, tagged: false, kind: 'generated' };
+      if (target) {
+        b.door.roadX = target.x;
+        b.door.roadZ = target.z;
+        b.door.roadDistance = Math.hypot(target.x - b.door.x, target.z - b.door.z);
+        b.door.road = target.road;
+      }
       b.doors = [b.door];
     }
   }
@@ -1577,17 +1704,179 @@ export function snapToRing(ring, x, z, centre) {
 }
 
 /** Closest point on any road centreline within `maxD` metres. */
-function nearestRoadPoint(roads, x, z, maxD) {
-  let best = null, bestD = maxD * maxD;
+function nearestRoadPoint(roads, x, z, maxD, motorOnly = false) {
+  let best = null, bestD2 = maxD * maxD;
   for (const r of roads) {
     if (r.spec.tunnel) continue;
-    for (const p of r.rawPts || r.pts) {
-      const dx = p[0] - x, dz = p[1] - z;
-      const d = dx * dx + dz * dz;
-      if (d < bestD) { bestD = d; best = p; }
+    if (motorOnly && ['foot', 'cycle', 'steps', 'plaza'].includes(r.spec.kind)) continue;
+    const pts = r.rawPts || r.pts;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], c = pts[i];
+      const ex = c[0] - a[0], ez = c[1] - a[1];
+      const ll = ex * ex + ez * ez;
+      const t = ll > 1e-9 ? clamp(((x - a[0]) * ex + (z - a[1]) * ez) / ll, 0, 1) : 0;
+      const px = a[0] + ex * t, pz = a[1] + ez * t;
+      const dx = px - x, dz = pz - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = { x: px, z: pz, distance: Math.sqrt(d2), road: r, segment: i - 1, t };
+      }
     }
   }
   return best;
+}
+
+/**
+ * Fill the most conspicuous missing pieces of a low-density commercial site.
+ *
+ * This is intentionally morphology-driven, not a North-American coordinate
+ * rule. A one/two-storey restaurant separated from a motor road gets a compact
+ * front apron only when no mapped car park exists. Mapped parking always wins;
+ * dense and mixed-use buildings receive no invented lot or roadside sign.
+ */
+export function inferCommercialSites(fs, opts = {}) {
+  const {
+    maxRoadDistance = 90,
+    maxBuildingArea = 2500,
+    maxLevels = 2,
+  } = opts;
+  const stats = { sites: 0, parking: 0, signs: 0, shrubs: 0 };
+  if (!fs.buildings?.length || !fs.roads?.length) return stats;
+  if (!fs.landcover) fs.landcover = [];
+  if (!fs.trees) fs.trees = [];
+
+  const clashesWithBuilding = (ring, owner) => {
+    const c = centroid(ring);
+    const probes = [c, ...ring];
+    for (const other of fs.buildings) {
+      if (other === owner || other.isPart) continue;
+      const bb = other.bounds;
+      const rb = bounds(ring);
+      if (bb.maxX < rb.minX || bb.minX > rb.maxX || bb.maxZ < rb.minZ || bb.minZ > rb.maxZ) continue;
+      if (probes.some((p) => pointInPolygon(other.ring, other.holes || [], p[0], p[1])) ||
+          pointInPolygon(ring, [], other.centroid[0], other.centroid[1])) return true;
+    }
+    return false;
+  };
+
+  for (const b of fs.buildings) {
+    if (!b.restaurant || b.commercialForm !== 'auto-oriented' || b.commercialSite ||
+        b.levels > maxLevels || b.area < 45 || b.area > maxBuildingArea || !b.door) continue;
+
+    const target = nearestRoadPoint(fs.roads, b.centroid[0], b.centroid[1], maxRoadDistance, true);
+    if (!target || target.road.spec.bridge || target.road.spec.kind === 'motorway') continue;
+    const front = doorOnRing(b.ring, b.centroid, [target.x, target.z]) || b.door;
+    if (!front) continue;
+    const centrelineDistance = Math.hypot(target.x - front.x, target.z - front.z);
+    const roadEdge = Math.max(1.5, target.road.spec.width / 2);
+    const available = centrelineDistance - roadEdge - 1.2;
+    if (available < 4.5) continue;
+
+    const edge = front.edge || [front.x - front.nz * 4, front.z + front.nx * 4,
+                                front.x + front.nz * 4, front.z - front.nx * 4];
+    let tx = edge[2] - edge[0], tz = edge[3] - edge[1];
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl; tz /= tl;
+    // Keep the facade normal pointed toward the road even if a tagged ring is
+    // wound unusually.
+    let nx = front.nx, nz = front.nz;
+    if ((target.x - front.x) * nx + (target.z - front.z) * nz < 0) {
+      nx = -nx; nz = -nz;
+    }
+
+    let frontageHalfWidth = clamp(
+      Math.max(front.edgeLength * 0.58, Math.sqrt(b.area) * 0.58), 6, 25);
+    const mappedParking = parkingNearBuilding(fs, b, 65);
+    let parking = mappedParking;
+    if (!parking && available >= 10) {
+      const inner = 2.0;
+      const outer = Math.min(available, 29);
+      let ring = null;
+      for (const scale of [1, 0.8, 0.62]) {
+        const hw = frontageHalfWidth * scale;
+        const candidate = [
+          [front.x - tx * hw + nx * inner, front.z - tz * hw + nz * inner],
+          [front.x + tx * hw + nx * inner, front.z + tz * hw + nz * inner],
+          [front.x + tx * hw + nx * outer, front.z + tz * hw + nz * outer],
+          [front.x - tx * hw + nx * outer, front.z - tz * hw + nz * outer],
+        ];
+        if (!clashesWithBuilding(candidate, b)) {
+          ring = candidate;
+          frontageHalfWidth = hw;
+          break;
+        }
+      }
+      if (ring) {
+        const tags = {
+          amenity: 'parking', parking: 'surface', surface: 'asphalt',
+          'terra:inferred': 'commercial_frontage',
+        };
+        const id = `commercial-site/${b.id}`;
+        parking = {
+          id,
+          source: `synthetic/${id}`,
+          ring,
+          holes: [],
+          area: area(ring),
+          bounds: bounds(ring),
+          spec: { ...landcoverSpec(tags), inferred: true },
+          tags,
+          name: b.name || b.restaurant.name || null,
+          synthetic: true,
+        };
+        fs.landcover.push(parking);
+        stats.parking++;
+      }
+    }
+
+    const site = {
+      inferred: true,
+      front,
+      road: target.road,
+      roadDistance: centrelineDistance,
+      parking: parking?.source || null,
+      parkingSynthetic: !!parking?.synthetic,
+      sign: null,
+    };
+
+    // Monument/directory signs belong in the setback, not on an urban
+    // pavement. Place one off the driveway centre so it does not block the
+    // route between road and door.
+    if (available >= 7 && (b.restaurants?.length || 1) <= 3) {
+      const rng = featureRng('commercial-site', b.id);
+      const along = (rng() < 0.5 ? -1 : 1) * Math.min(frontageHalfWidth * 0.58, 6.5);
+      const out = clamp(available * 0.68, 4.5, 17);
+      site.sign = {
+        x: front.x + nx * out + tx * along,
+        z: front.z + nz * out + tz * along,
+        nx, nz,
+      };
+      stats.signs++;
+    }
+
+    // Two low foundation shrubs break the bare-box silhouette without
+    // pretending to know an exact tree inventory. They remain deterministic
+    // and use the renderer's regional lighting/season treatment.
+    if (front.edgeLength >= 6) {
+      const spread = Math.min(front.edgeLength * 0.34, 4.8);
+      for (const side of [-1, 1]) {
+        const x = front.x + tx * spread * side + nx * 0.85;
+        const z = front.z + tz * spread * side + nz * 0.85;
+        if (Math.hypot(x - b.door.x, z - b.door.z) < 1.4) continue;
+        fs.trees.push({
+          id: `commercial-shrub/${b.id}/${side}`,
+          x, z, height: 1.15 + (side > 0 ? 0.18 : 0), diameter: 1.3,
+          species: 'shrub', leafType: null, synthetic: true,
+        });
+        stats.shrubs++;
+      }
+    }
+
+    b.commercialSite = site;
+    stats.sites++;
+  }
+  return stats;
 }
 
 /**
