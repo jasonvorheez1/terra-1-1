@@ -156,14 +156,30 @@ export class SkySystem {
     // Skylight is the only thing lighting a shadowed street, and in a city
     // that is most of what you are looking at. Under-doing it is what makes
     // shadows read as holes rather than as shade.
-    // Skylight is the only thing lighting a shadowed street, and in a city
-    // that is most of what you are looking at. Under-doing it is what makes
-    // shadows read as holes rather than as shade.
-    this.hemi.intensity = lerp(lerp(1.9, 2.4, overcast), 0.13, night);
+    //
+    // The night floor used to be 0.13/0.06, which measured on the rendered
+    // framebuffer (not just the uniform value - ACES Filmic crushes the low end
+    // hard enough that the two do not track linearly) at a mean ground
+    // brightness of about 2 out of 255 wherever the moon was down and there was
+    // no streetlamp nearby, which is most of the Earth on most nights. That is
+    // not "dark", it is "cannot see the ground you are walking on", and this is
+    // a game about walking around real places at whatever time you chose to be
+    // there. A first attempt raised the floor to 0.32/0.16 - a 2.5x jump on the
+    // uniforms - and only moved the rendered ground from 2/255 to 3/255,
+    // because that whole range sits on the flattest part of the tone curve.
+    // Sweeping the actual output rather than guessing at the input: it takes
+    // 1.8/0.9 to reach a ground brightness of about 30/255 - clearly darker
+    // than the ~90-150 of daylight, but a place you can actually see to walk
+    // through. Starlight alone is nowhere near this bright in reality, but a
+    // renderer without a human eye's night adaptation behind it has to cheat,
+    // and the sky dome itself is unlit by these two lights - only the ground,
+    // buildings and trees pick this up, so the sky stays properly black.
+    this.hemi.intensity = lerp(lerp(1.9, 2.4, overcast), 1.8, night);
     // Ambient stands in for the light that has bounced off everything else.
     // Without a meaningful amount of it a sunlit street between six-storey
-    // buildings renders as a black trench, which is not what it looks like.
-    this.ambient.intensity = lerp(0.5, 0.06, night);
+    // buildings renders as a black trench, which is not what it looks like -
+    // and at night the same underlighting made the whole world a black trench.
+    this.ambient.intensity = lerp(0.5, 0.9, night);
 
     // Stars fade in through twilight and are washed out by cloud.
     this.stars.material.opacity = clamp(night * 1.15 - 0.1, 0, 1) * (1 - overcast * 0.95);
