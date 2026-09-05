@@ -53,6 +53,8 @@ const HOST_LIMITS = {
   'server.arcgisonline.com': [6, 0],
   'services.arcgisonline.com': [6, 0],
   'tile.openstreetmap.org': [2, 60],
+  'commons.wikimedia.org': [2, 120],
+  'www.wikidata.org': [2, 120],
 };
 
 function queueFor(url) {

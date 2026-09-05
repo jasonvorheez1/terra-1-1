@@ -1,10 +1,9 @@
-// Building coverage from Overture Maps.
+// Global coverage fallbacks from Overture Maps.
 //
-// Live OpenStreetMap remains the primary map. Overture's monthly buildings
-// release is used as a gap-filler: its conflated tiles contain OSM, community,
-// authoritative and machine-learned roofprints, with OSM explicitly given the
-// highest priority. The merge in world/features.js keeps the live OSM geometry
-// and only admits footprints which came from another source.
+// Live OpenStreetMap remains the primary map. Overture's monthly buildings,
+// transportation and places themes are gap-fillers. The merge in
+// world/features.js keeps live OSM geometry/businesses first, then admits real
+// footprints, road fallback, and confidence-filtered restaurant points.
 //
 // The official PMTiles archive is immutable and addressed with HTTP range
 // requests, so a browser can read the handful of z14 tiles around the player
@@ -178,6 +177,185 @@ export class OvertureBuildingsClient {
 }
 
 export const overtureBuildings = new OvertureBuildingsClient();
+
+// --- places ---------------------------------------------------------------
+
+export const OVERTURE_PLACES_URL =
+  `https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/${OVERTURE_RELEASE}/places.pmtiles`;
+export const OVERTURE_PLACE_ZOOM = 14;
+
+function jsonProperty(value, fallback = null) {
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string' || !value) return fallback;
+  try { return JSON.parse(value); } catch (e) { return fallback; }
+}
+
+function mostlyLatin(value) {
+  const text = String(value || '');
+  if (!text) return false;
+  const letters = text.match(/\p{L}/gu) || [];
+  if (!letters.length) return true;
+  const latin = text.match(/\p{Script=Latin}/gu) || [];
+  return latin.length / letters.length >= 0.7;
+}
+
+function latinCommonName(names, fallback) {
+  const common = names?.common;
+  if (common && typeof common === 'object') {
+    if (typeof common.en === 'string') return common.en;
+    for (const value of Object.values(common)) {
+      if (typeof value === 'string' && mostlyLatin(value)) return value;
+    }
+  }
+  return mostlyLatin(fallback) ? fallback : null;
+}
+
+/** Map the Overture taxonomy onto the small amenity vocabulary the renderer uses. */
+export function overtureRestaurantCategory(properties = {}) {
+  const taxonomy = jsonProperty(properties.taxonomy, {}) || {};
+  const legacy = jsonProperty(properties.categories, {}) || {};
+  const hierarchy = Array.isArray(taxonomy.hierarchy) ? taxonomy.hierarchy : [];
+  const values = [properties.basic_category, taxonomy.primary, legacy.primary, ...hierarchy]
+    .filter(Boolean).map((v) => String(v).toLowerCase());
+  const matches = (pattern) => values.some((v) => pattern.test(v));
+  const isRestaurant = hierarchy.includes('restaurant') ||
+    matches(/^(?:restaurant|casual_eatery|food_court)$/);
+  const foodContext = isRestaurant || hierarchy.includes('food_and_drink') ||
+    matches(/^(?:pub|bar|cafe|coffee_shop|tea_house|ice_cream_shop|food_court)$/);
+  // Alternates are useful search hints, not permission to recategorise the
+  // primary entity. A music venue with alternate=bar and an oxygen bar were
+  // otherwise both rendered as restaurants.
+  if (!foodContext) return null;
+
+  if (matches(/(?:^|_)(?:pub|gastropub|brewpub)(?:_|$)/)) return 'pub';
+  if (matches(/(?:^|_)(?:bar|cocktail_bar|wine_bar)(?:_|$)/)) return 'bar';
+  if (matches(/(?:cafe|coffee_shop|tea_house)/)) return 'cafe';
+  if (matches(/(?:ice_cream|gelato|frozen_yogurt)/)) return 'ice_cream';
+  if (matches(/food_court/)) return 'food_court';
+  if (matches(/fast_food/) || (isRestaurant && matches(/(?:burger|hot_dog|sandwich|taco)/))) {
+    return 'fast_food';
+  }
+  return isRestaurant ? 'restaurant' : null;
+}
+
+function overtureCuisineHints(properties = {}) {
+  const taxonomy = jsonProperty(properties.taxonomy, {}) || {};
+  const legacy = jsonProperty(properties.categories, {}) || {};
+  const values = [properties.basic_category, taxonomy.primary, ...(taxonomy.hierarchy || []),
+    ...(taxonomy.alternates || []), legacy.primary, ...(legacy.alternate || [])]
+    .filter(Boolean).join(' ').toLowerCase();
+  const rules = [
+    ['mexican', /mexican|taco|tex_mex/], ['japanese', /japanese/], ['sushi', /sushi/],
+    ['ramen', /ramen/], ['chinese', /chinese/], ['korean', /korean/],
+    ['thai', /thai/], ['vietnamese', /vietnamese/], ['indian', /indian/],
+    ['italian', /italian/], ['pizza', /pizza/], ['american', /american/],
+    ['burger', /burger/], ['diner', /diner|breakfast_and_brunch/],
+    ['coffee_shop', /coffee_shop|cafe/], ['barbecue', /barbecue|bbq/],
+    ['seafood', /seafood/], ['steak_house', /steak_house|steakhouse/],
+  ];
+  return rules.filter(([, pattern]) => pattern.test(values)).map(([name]) => name);
+}
+
+/** Decode one tile feature's flattened MVT properties into a restaurant record. */
+export function overtureRestaurantRecord(properties = {}, coordinates = null) {
+  const category = overtureRestaurantCategory(properties);
+  if (!category || !Array.isArray(coordinates) || coordinates.length < 2) return null;
+  const names = jsonProperty(properties.names, {}) || {};
+  const brand = jsonProperty(properties.brand, {}) || {};
+  const brandNames = brand.names || {};
+  const name = names.primary || properties['@name'] || brandNames.primary || null;
+  if (!name) return null;
+  // A few provider categories conflate a service named "bar" with a food or
+  // drink venue. These phrases describe an activity/wellness service in every
+  // region, so excluding them is semantic cleanup rather than a city rule.
+  if (/\b(?:oxygen bar|bar crawl)\b/i.test(String(name))) return null;
+  const websites = jsonProperty(properties.websites, []) || [];
+  const sources = jsonProperty(properties.sources, []) || [];
+  const signName = latinCommonName(names, name) ||
+    latinCommonName(brandNames, brandNames.primary) || null;
+  return {
+    id: String(properties.id || ''),
+    lon: Number(coordinates[0]),
+    lat: Number(coordinates[1]),
+    name: String(name),
+    signName,
+    brand: brandNames.primary || null,
+    brandWikidata: brand.wikidata || null,
+    category,
+    cuisines: overtureCuisineHints(properties),
+    website: Array.isArray(websites) ? websites.find((v) => /^https?:\/\//i.test(v)) || null : null,
+    confidence: Number(properties.confidence),
+    operatingStatus: properties.operating_status || null,
+    sources: Array.isArray(sources) ? sources : [],
+    properties,
+  };
+}
+
+/** Decode only restaurant-like points from one Overture places MVT tile. */
+export function decodePlaceTile(data, x, y, z) {
+  if (!data || !data.byteLength) return [];
+  const tile = new VectorTile(new PbfReader(new Uint8Array(data)));
+  const layer = tile.layers.place;
+  if (!layer) return [];
+  const out = [];
+  for (let i = 0; i < layer.length; i++) {
+    const feature = layer.feature(i);
+    if (feature.type !== 1) continue;
+    const geo = feature.toGeoJSON(x, y, z);
+    if (geo.geometry?.type !== 'Point') continue;
+    const record = overtureRestaurantRecord(feature.properties || {}, geo.geometry.coordinates);
+    if (record) out.push(record);
+  }
+  return out;
+}
+
+export class OverturePlacesClient {
+  constructor({ url = OVERTURE_PLACES_URL, zoom = OVERTURE_PLACE_ZOOM } = {}) {
+    this.url = url;
+    this.zoom = zoom;
+    this.archive = new PMTiles(new CachedRangeSource(url));
+    this.tiles = new Map();
+    this.maxTiles = 72;
+  }
+
+  tile(z, x, y) {
+    const key = `${z}/${x}/${y}`;
+    let pending = this.tiles.get(key);
+    if (pending) {
+      this.tiles.delete(key);
+      this.tiles.set(key, pending);
+      return pending;
+    }
+    pending = this.archive.getZxy(z, x, y)
+      .then((result) => decodePlaceTile(result && result.data, x, y, z))
+      .catch((error) => { this.tiles.delete(key); throw error; });
+    this.tiles.set(key, pending);
+    while (this.tiles.size > this.maxTiles) this.tiles.delete(this.tiles.keys().next().value);
+    return pending;
+  }
+
+  async fetchPlaces(bbox, { signal = null } = {}) {
+    if (signal && signal.aborted) throw new Error('aborted');
+    const tiles = tilesForBBox(bbox, this.zoom);
+    const settled = await Promise.allSettled(tiles.map((t) => this.tile(t.z, t.x, t.y)));
+    if (signal && signal.aborted) throw new Error('aborted');
+    const failures = settled.filter((r) => r.status === 'rejected');
+    const successes = settled.filter((r) => r.status === 'fulfilled');
+    if (!successes.length && failures.length) throw failures[0].reason;
+
+    const byId = new Map();
+    for (const result of successes) {
+      for (const rec of result.value) {
+        if (rec.lon < bbox.west || rec.lon > bbox.east ||
+            rec.lat < bbox.south || rec.lat > bbox.north) continue;
+        if (!byId.has(rec.id)) byId.set(rec.id, rec);
+      }
+    }
+    return [...byId.values()];
+  }
+}
+
+export const overturePlaces = new OverturePlacesClient();
 
 // --- transportation --------------------------------------------------------
 

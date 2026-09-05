@@ -752,7 +752,10 @@ export function polylineNormals(pts, closed = false) {
     const ml = Math.hypot(mx, mz);
     if (ml < 1e-6) { normals[i] = [n2x, n2z, 1]; continue; }
     mx /= ml; mz /= ml;
-    const scale = Math.min(4, 1 / Math.max(0.25, mx * n1x + mz * n1z));
+    // A near-reversal otherwise creates a four-half-width needle. Two is the
+    // conventional miter limit: a right-angle corner still meets exactly,
+    // while hairpins stop producing road triangles tens of metres long.
+    const scale = Math.min(2, 1 / Math.max(0.25, mx * n1x + mz * n1z));
     normals[i] = [mx, mz, scale];
   }
   return normals;

@@ -21,8 +21,10 @@ The distinction matters, so it is drawn sharply.
 
 | Thing | Source |
 |---|---|
-| Buildings, streets, tunnels, bridges, walls, steps, trees, benches, lamp posts | [OpenStreetMap](https://www.openstreetmap.org/copyright) via the Overpass API |
+| Buildings, streets, tunnels, bridges, walls, steps, trees, benches, lamp posts | [OpenStreetMap](https://www.openstreetmap.org/copyright) via the Overpass API, with monthly [Overture Maps](https://overturemaps.org/) building/road gap fills |
 | Building heights, storey counts, roof shapes, materials, colours | OSM tags, following the [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings) scheme |
+| Restaurant names, categories and locations | Live OSM first; confidence-filtered [Overture Places](https://docs.overturemaps.org/guides/places/) fills missing businesses worldwide |
+| Exact restaurant logos or mapped photos, when linked | [Wikimedia Commons](https://commons.wikimedia.org/) through explicit OSM/Wikidata identity, with creator/licence attribution |
 | Terrain elevation | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen terrarium encoding, from SRTM and national DEMs) |
 | Vegetation density, greenness, biome | NASA [GIBS](https://nasa-gibs.github.io/gibs-api-docs/) MODIS Terra 16-day NDVI |
 | Optional aerial imagery on the terrain *and on flat roofs* | Esri World Imagery |
@@ -41,9 +43,11 @@ published times for London.
   stairs, furniture — seeded from the building's OSM id, so the same building
   always has the same interior. Walk out and back in and nothing has moved.
   They are discrete cells: press `E` at a door to load one. See below.
-- **Everything you can see.** Facade textures, roof tiles, foliage, tarmac,
+- **Most surface appearance.** Facade textures, roof tiles, foliage, tarmac,
   street furniture and the entire soundscape are generated at load time. The
-  game ships no image or audio files at all.
+  one deliberate exception is a freely licensed restaurant logo or mapped
+  photo explicitly linked to that exact business through OSM/Wikidata. Nothing
+  is bundled and arbitrary web images are never scraped.
 - **Where mappers left gaps.** An untagged building gets a height inferred from
   its type and footprint, a plausible palette for its class, and a front door on
   the facade nearest the road.
@@ -182,6 +186,38 @@ like it has no pavements at all.
 Crossings (`footway=crossing`) stay flush, because that is the point of a
 crossing.
 
+### Road junctions and markings
+
+Road surfaces still follow OSM centrelines, but their secondary geometry is
+intersection-aware. Shared OSM nodes cut a gap in raised kerbs, pavements and
+lane paint; one priority-owned surface patch fills the angular wedges between
+the incident carriageways. That handles T-junctions, skewed crossings and slip
+roads without stacking several coplanar discs at the same point. Acute ribbon
+miters are capped so a near-hairpin cannot throw a long asphalt triangle across
+the block.
+
+Lane dividers are generated individually from `lanes`, `lanes:forward`,
+`lanes:backward` and `lanes:both_ways`. A one-lane one-way road gets no invented
+centre line, a multilane one-way road gets every dashed separator, and a divided
+two-way road gets a proper centre pair. In North America the centre paint is
+yellow while ordinary separators remain white. Separately mapped crossings can
+carry zebra paint, and explicit `lane_markings=no` is respected.
+
+These rules are global, not tied to the Las Vegas test scene. Named-place
+searches, map picks and presets carry their ISO country code into the world;
+typed coordinates resolve it in parallel with the map load. Directional lane
+groups are therefore mirrored in every left-driving country or territory while
+right-driving countries retain the OSM way-relative layout. The automated live
+audit samples a large U.S. city, a small U.S. town, continental Europe, Japan
+and Australia so a location-specific shortcut cannot satisfy it.
+
+Sidewalk direction is preserved rather than reduced to one boolean, so
+`sidewalk=left` no longer builds a second pavement on the right. On an untagged
+North-American residential street the generator conservatively leaves the
+sidewalk out; mapped sidewalks and main-road sidewalks still win. Parking only
+widens the carriageway when the tag describes an actual parking lane—`no`,
+`separate` and off-street parking no longer create phantom road width.
+
 ### Buildings look like what they are
 
 OSM says what each building is for, and an extruded footprint with windows on it
@@ -194,7 +230,7 @@ gets the trim its `building=*` value calls for:
 | House | Pitched roof, chimney, porch over the door |
 | Apartments | Cornice, balconies on the upper floors, entrance porch |
 | Shop | Fascia signboard, projecting awning, roof clutter |
-| Restaurant / cafe | Real OSM name on the entrance, cuisine/brand-coloured sign and awning |
+| Restaurant / cafe | Real mapped name; cuisine/category architecture, identity-seeded detail, optional licensed logo/photo |
 | Office | Cornice, entrance canopy, rooftop plant |
 | School / hospital | Wide covered entrance, rooftop plant |
 | Church | Belfry tower and a slate spire with a finial |
@@ -212,20 +248,42 @@ the trim runs along a simplified outline. Balconies get a hard per-building
 allowance: uncapped, they cost more than every other piece of geometry in the
 city combined. As built, detail is around 470 triangles per building.
 
-Restaurants are associated before the building mesh is made. A food POI is
-matched to the smallest footprint containing it, including an Overture
-gap-filling footprint when OSM maps the business as a node but not its building.
-Only a short nearest-wall fallback is allowed, so a restaurant is not guessed
-onto a building across the street. Its real `name`, `brand`, `cuisine`,
-`brand:colour`, drive-through and outdoor-seating tags then shape the storefront.
+Restaurants are associated before the building mesh is made. Live OSM is the
+authoritative first source; Overture Places fills gaps with open businesses
+above a confidence threshold, while low-confidence, permanently closed and
+OSM-duplicate records are rejected. A food POI is matched to the smallest
+footprint containing it, including an Overture gap-filling footprint when the
+business and its building come from different sources. Only a short nearest-wall
+fallback is allowed, so a restaurant is not guessed onto a building across the
+street. Its real `name`, `brand`, `cuisine`, `brand:colour`, drive-through and
+outdoor-seating tags then shape the storefront.
+
+Large shared footprints retain each POI pin instead of discarding every tenant
+after the first. Up to eight businesses are placed on their nearest distinct
+facade positions at high detail, with a frontage-based cap so a casino, mall or
+food hall cannot exhaust the geometry budget.
 
 Names are assembled from one shared glyph atlas rather than generating a new
-texture and material for every business. This keeps an independent place such
-as “Homer's Dine In” unique without turning a dense restaurant district into
-hundreds of extra texture downloads and draw calls. OSM-linked image and
-Wikimedia references are retained with the restaurant metadata for a future
-licensed-photo pass; arbitrary web photos are not scraped or baked into the
-world because their licence, attribution and facade perspective are unknown.
+texture and material for every business. Mapper-supplied English/Latin names
+are used for scripts outside that compact atlas; without one, the sign uses the
+mapped cuisine instead of `????`, while the original local name remains in the
+interaction prompt. This keeps an independent place such as “Homer's Dine In”
+unique without turning a dense restaurant district into hundreds of draw calls.
+
+Architecture then varies deterministically by both meaning and identity: diners
+get chrome trim, cafes and Italian restaurants can get striped awnings, Japanese
+restaurants get noren-like curtains, Mexican and South Asian restaurants get
+tiled plinths, pubs/cafes can get blade signs, and takeaway, drive-through and
+outdoor-seating tags become visible geometry. The same business gets the same
+variant on every visit; unrelated restaurants of one cuisine do not become clones.
+
+For higher fidelity, an exact `wikimedia_commons`, `wikidata`, or
+`brand:wikidata` reference is resolved through the Commons API. Brand identities
+prefer Wikidata's logo property and individual restaurants prefer their mapped
+photo. Only CC0, public-domain, CC BY and CC BY-SA media is accepted; the image
+keeps its aspect ratio, is cached, and its creator/source/licence appears in
+About. A mere matching name is never enough to fetch an image, and arbitrary
+business sites or web search results are not treated as texture licences.
 
 ### Natural ground, with optional aerial photographs
 
@@ -324,8 +382,9 @@ tests/        headless test suites
 ## Tests
 
 ```bash
-npm test              # 116 headless checks, no network
+npm test              # 164 headless checks, no network
 npm run test:live     # end-to-end against live OSM data
+npm run test:restaurants # OSM + Overture + Commons across five world regions
 ```
 
 The unit suites cover the parts where being wrong is invisible until it is
@@ -335,9 +394,10 @@ hundreds of random polygons, OSM tag parsing, and floor-plan validity (no
 overlapping rooms, every room reachable from the front door) across 300
 randomly generated footprints.
 
-The live suite fetches real data for Paris and Manhattan and checks that
-tunnels stay underground, bridge decks clear what they cross, bridge ends meet
-the street, and every building gets a door on its outline.
+The live suites check terrain/structure behavior in Paris and Manhattan, road
+generation across five continents, and restaurant association in Las Vegas,
+Grandview (Missouri), Paris, Kyoto and Sydney. The restaurant audit deliberately
+survives an Overpass outage via Overture instead of accepting an empty town.
 
 ---
 
@@ -348,7 +408,7 @@ This game:
 
 - caches everything it downloads, so a second visit costs nothing;
 - rate limits itself per host (one Overpass query at a time, with a gap);
-- fails over between five Overpass mirrors and benches one that errors;
+- fails over between three global Overpass mirrors and benches one that errors;
 - splits each region into a *structure* query (what you walk on and bump into)
   and a *detail* query (trees, benches, signs) so you are moving before the
   decoration arrives.
@@ -371,6 +431,15 @@ The code here is MIT licensed — see [LICENSE](LICENSE). The data is not:
 - Map data © OpenStreetMap contributors, available under the
   [Open Database Licence](https://www.openstreetmap.org/copyright). Anything you
   publish that is derived from it must say so.
+- Building/road gap fills and restaurant places come from Overture Maps
+  Foundation's monthly release. Places are provided under CDLA Permissive 2.0,
+  CC0 and Apache 2.0 depending on source; see Overture's
+  [current attribution and licensing page](https://docs.overturemaps.org/attribution/).
+  Foursquare-derived records are Copyright 2024 Foursquare Labs, Inc.; they are
+  transformed to the Overture schema, then filtered and reprojected here.
+- Restaurant media is loaded from Wikimedia Commons only when the exact mapped
+  identity resolves to a free, transformable licence. Each loaded image's
+  creator, licence and source page are shown in the in-game About screen.
 - Elevation from the AWS Terrain Tiles public dataset, itself assembled from
   SRTM, NED, and other national sources with their own terms.
 - NDVI and Blue Marble imagery courtesy of NASA EOSDIS GIBS.
@@ -378,3 +447,4 @@ The code here is MIT licensed — see [LICENSE](LICENSE). The data is not:
   before any use beyond looking at it.
 - The libraries under `vendor/` are redistributed unmodified and carry their own
   MIT licences — see [vendor/LICENSES.md](vendor/LICENSES.md).
+- Runtime data notices are collected in [DATA-NOTICES.md](DATA-NOTICES.md).

@@ -28,7 +28,7 @@ import {
 } from '../geometry.js';
 import { clamp, lerp, DEG } from '../../core/util.js';
 import { featureRng } from '../osm-tags.js';
-import { addArchitecture, addDoorway } from './architecture.js';
+import { addArchitecture, addDoorway, addRestaurantStorefronts } from './architecture.js';
 import { box } from './props.js';
 
 const GROUND_BAND = 4.2;          // metres of ground-floor treatment
@@ -136,6 +136,10 @@ function addPartedEntrance(b, ctx, multi, collide) {
     const acc = multi.for('solid', ctx.materials.solid({ roughness: 0.85 }));
     addDoorway(b.door, acc, collide, baseY, colourToLinear(b.facade.colour), b,
                featureRng('arch', b.id));
+    if (b.restaurant) {
+      addRestaurantStorefronts(b, b.door, ctx, multi, acc, baseY,
+                               featureRng('restaurant-arch', b.id));
+    }
   } catch (e) {
     if (ctx.onError) ctx.onError('entrance', b.source, e);
   }

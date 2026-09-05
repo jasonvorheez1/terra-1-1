@@ -18,7 +18,7 @@
 
 import { fetchCached } from './net.js';
 import { padBBox } from './projection.js';
-import { overtureBuildings, overtureSegments } from './overture.js';
+import { overtureBuildings, overtureSegments, overturePlaces } from './overture.js';
 
 // Every endpoint in this list must mirror the whole planet. Regional Overpass
 // instances return a valid empty response outside their extract, which is
@@ -324,8 +324,11 @@ export class Region {
     this.data.bbox = bbox;
     this.overtureBuildings = [];
     this.overtureSegments = [];
+    this.overturePlaces = [];
     this.overtureReady = false;
     this.overtureError = null;
+    this.overturePlacesReady = false;
+    this.overturePlacesError = null;
     this.structureReady = false;
     this.detailReady = false;
     this.failed = null;
@@ -346,11 +349,18 @@ export class Region {
  * still arrives complete from whichever side asks first.
  */
 export class RegionLoader {
-  constructor({ sizeM = 1200, marginM = 220, maxRegions = 9, useOvertureBuildings = true } = {}) {
+  constructor({
+    sizeM = 1200,
+    marginM = 220,
+    maxRegions = 9,
+    useOvertureBuildings = true,
+    useOverturePlaces = true,
+  } = {}) {
     this.sizeM = sizeM;
     this.marginM = marginM;
     this.maxRegions = maxRegions;
     this.useOvertureBuildings = useOvertureBuildings;
+    this.useOverturePlaces = useOverturePlaces;
     this.regions = new Map();
     this.onProgress = null;
     // Raised when a region gives up, and again when a retry rescues it, so the
@@ -420,9 +430,22 @@ export class RegionLoader {
       const segmentPending = this.useOvertureBuildings
         ? overtureSegments.fetchSegments(bbox, { signal: region.abort.signal })
         : Promise.resolve([]);
-      const [osmResult, overtureResult, segmentResult] =
-        await Promise.allSettled([osmPending, overturePending, segmentPending]);
+      // Overture Places is independent of OSM and supplies restaurants in
+      // sparsely mapped towns. It remains a fallback: the merge keeps live OSM
+      // businesses whenever both sources describe the same establishment.
+      const placesPending = this.useOverturePlaces
+        ? overturePlaces.fetchPlaces(bbox, { signal: region.abort.signal })
+        : Promise.resolve([]);
+      const [osmResult, overtureResult, segmentResult, placesResult] =
+        await Promise.allSettled([osmPending, overturePending, segmentPending, placesPending]);
       if (segmentResult.status === 'fulfilled') region.overtureSegments = segmentResult.value;
+      if (placesResult.status === 'fulfilled') {
+        region.overturePlaces = placesResult.value;
+        region.overturePlacesReady = true;
+      } else {
+        region.overturePlacesError = placesResult.reason;
+        region.overturePlacesReady = true;
+      }
 
       if (osmResult.status === 'fulfilled') {
         region.data.ingest(osmResult.value).indexJunctions();

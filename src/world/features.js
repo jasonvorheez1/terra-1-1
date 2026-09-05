@@ -310,6 +310,13 @@ export function extractFeatures(osm, projection, opts = {}) {
         source: `way/${way.id}`,
         pts: resample(line, maxRoadSegment),
         rawPts: line,
+        // Preserve every shared OSM node, including ones in the middle of a
+        // long way. The renderer uses these to stop kerbs and lane paint short
+        // of the intersection instead of carrying them straight through it.
+        junctions: pts.map((p, i) => ({ ref: way.refs[i], x: p[0], z: p[1] }))
+          .filter((j) => (osm.nodeWayCount.get(j.ref) || 0) > 1),
+        junctionPoints: pts.filter((p, i) =>
+          (osm.nodeWayCount.get(way.refs[i]) || 0) > 1),
         spec,
         tags,
         closed,
@@ -440,7 +447,54 @@ export function extractFeatures(osm, projection, opts = {}) {
     }
   }
 
+  assignRoadJunctionPatches(fs);
   return fs;
+}
+
+/**
+ * Give each shared OSM road node one owner and one small surface patch. Plain
+ * ribbons meet cleanly at 90 degrees but expose triangular ground wedges at
+ * forks, slip roads and skewed divided intersections. Ownership prevents the
+ * same coplanar patch being emitted by every incident road.
+ */
+export function assignRoadJunctionPatches(fs) {
+  const groups = new Map();
+  for (const road of fs.roads) {
+    road.junctionPatches = [];
+    for (const junction of road.junctions || []) {
+      if (junction.ref == null) continue;
+      let group = groups.get(junction.ref);
+      if (!group) { group = []; groups.set(junction.ref, group); }
+      if (!group.some((item) => item.road === road)) group.push({ road, junction });
+    }
+  }
+
+  let count = 0;
+  for (const [ref, group] of groups) {
+    const atGrade = group.filter(({ road }) =>
+      !road.spec.bridge && !road.spec.tunnel && !road.spec.covered && road.spec.layer === 0);
+    if (atGrade.length < 2) continue;
+    const motor = atGrade.filter(({ road }) =>
+      !['foot', 'cycle', 'steps'].includes(road.spec.kind));
+    // A footway touching the centreline of one continuous road is a crossing,
+    // not a new carriageway branch. Do not stamp a dark asphalt disc there.
+    const candidates = motor.length >= 2 ? motor
+      : motor.length === 0 ? atGrade
+      : [];
+    if (candidates.length < 2) continue;
+    candidates.sort((a, b) =>
+      (b.road.spec.cls.priority - a.road.spec.cls.priority) ||
+      (b.road.spec.width - a.road.spec.width) ||
+      String(a.road.source).localeCompare(String(b.road.source)));
+    const owner = candidates[0];
+    const radius = clamp(Math.max(...candidates.map(({ road }) => road.spec.width / 2)) + 0.45,
+                         1.1, 18);
+    owner.road.junctionPatches.push({
+      ref, x: owner.junction.x, z: owner.junction.z, radius,
+    });
+    count++;
+  }
+  return count;
 }
 
 /** Route a closed ring to the right feature list based on its tags. */
@@ -753,6 +807,102 @@ function safeJson(s) {
   try { return JSON.parse(s); } catch (e) { return null; }
 }
 
+function placeNameKey(value) {
+  return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Add open, sufficiently confident Overture restaurant points where OSM did
+ * not already map the same business. OSM always wins: it is live, editable and
+ * can carry facade-specific tags. Overture is the global gap-filler that keeps
+ * small towns from losing every restaurant simply because their POIs are thin.
+ */
+export function mergeOvertureRestaurantPlaces(fs, records, projection, opts = {}) {
+  const { seen = new Set(), minConfidence = 0.55 } = opts;
+  const stats = { added: 0, duplicates: 0, lowConfidence: 0, closed: 0, invalid: 0 };
+  if (!records || !records.length) return stats;
+
+  const known = [];
+  for (const poi of fs.pois) {
+    if (!isRestaurantTags(poi.tags)) continue;
+    known.push({ x: poi.x, z: poi.z, key: placeNameKey(poi.tags.name || poi.name) });
+  }
+  for (const b of fs.buildings) {
+    if (!isRestaurantTags(b.tags)) continue;
+    known.push({ x: b.centroid[0], z: b.centroid[1], key: placeNameKey(b.tags.name || b.name) });
+  }
+
+  // If the release contains two candidate records for one place, retain the
+  // one Overture itself considers most reliable.
+  const ordered = records.slice().sort((a, b) =>
+    (Number(b.confidence) || 0) - (Number(a.confidence) || 0));
+  for (const record of ordered) {
+    const source = `overture-place/${record.id}`;
+    if (!record.id || seen.has(source)) continue;
+    seen.add(source);
+
+    const confidence = Number(record.confidence);
+    if (!Number.isFinite(confidence) || confidence < minConfidence) {
+      stats.lowConfidence++;
+      continue;
+    }
+    if (record.operatingStatus === 'permanently_closed') {
+      stats.closed++;
+      continue;
+    }
+    if (!record.name || !record.category || !Number.isFinite(record.lat) ||
+        !Number.isFinite(record.lon)) {
+      stats.invalid++;
+      continue;
+    }
+
+    const x = projection.toLocalX(record.lon);
+    const z = projection.toLocalZ(record.lat);
+    const key = placeNameKey(record.name);
+    let duplicate = false;
+    for (const other of known) {
+      const distance = Math.hypot(x - other.x, z - other.z);
+      if (distance <= 2.5 || (key && key === other.key && distance <= 60)) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      stats.duplicates++;
+      continue;
+    }
+
+    const tags = {
+      amenity: record.category,
+      name: record.name,
+      source: 'Overture Maps Foundation',
+      'overture:id': record.id,
+      'overture:confidence': String(confidence),
+    };
+    if (record.signName && record.signName !== record.name) tags['name:en'] = record.signName;
+    if (record.brand) tags.brand = record.brand;
+    if (record.brandWikidata) tags['brand:wikidata'] = record.brandWikidata;
+    if (record.cuisines?.length) tags.cuisine = record.cuisines.join(';');
+    if (record.website) tags.website = record.website;
+
+    fs.pois.push({
+      id: source,
+      source,
+      x, z,
+      name: record.name,
+      category: record.category,
+      tags,
+      overture: true,
+      confidence,
+      overtureSources: record.sources || [],
+    });
+    known.push({ x, z, key });
+    stats.added++;
+  }
+  return stats;
+}
+
 export function mergeOvertureBuildings(fs, records, projection, opts = {}) {
   const { seen = new Set(), minBuildingArea = 6, simplifyTolerance = 0.25 } = opts;
   const stats = { added: 0, enriched: 0, duplicates: 0, osmGeometry: 0, invalid: 0 };
@@ -878,11 +1028,17 @@ export function isRestaurantTags(tags) {
 export function restaurantFromTags(tags, id = null) {
   if (!isRestaurantTags(tags)) return null;
   const name = tags.name || tags.brand || tags.operator || null;
+  // Keep the real local name as the canonical identity. A mapper-supplied
+  // Latin/English form is only a street-sign rendering hint for the compact
+  // shared atlas, so non-Latin names do not turn into rows of question marks.
+  const signName = tags['name:en'] || tags['brand:en'] || tags['name:latin'] ||
+    tags['name:transcription'] || name;
   const cuisines = String(tags.cuisine || '')
     .split(/[;,]/).map((v) => v.trim().toLowerCase()).filter(Boolean);
   return {
     id,
     name,
+    signName,
     brand: tags.brand || null,
     category: tags.amenity,
     cuisines,
@@ -892,7 +1048,12 @@ export function restaurantFromTags(tags, id = null) {
     outdoorSeating: isTruthy(tags.outdoor_seating),
     openingHours: tags.opening_hours || null,
     website: tags.website || tags['contact:website'] || null,
+    brandWikidata: tags['brand:wikidata'] || null,
+    subjectWikidata: tags.wikidata || null,
+    // Keep the legacy aggregate fields for callers, but retain provenance so
+    // the media resolver knows whether to prefer a brand logo or a place photo.
     wikidata: tags['brand:wikidata'] || tags.wikidata || null,
+    commons: tags.wikimedia_commons || null,
     image: tags.wikimedia_commons || tags.image || null,
     mapillary: tags.mapillary || null,
     tags,
@@ -939,6 +1100,14 @@ export function assignRestaurantBusinesses(fs, opts = {}) {
     }
     if (!best) continue;
 
+    // Keep the real POI pin and its nearest wall point. Large blocks, malls and
+    // casinos often contain several independently named restaurants; throwing
+    // this position away forced all of them onto one entrance and only the
+    // alphabetically first sign survived the render pass.
+    restaurant.poiX = poi.x;
+    restaurant.poiZ = poi.z;
+    restaurant.facadeDoor = snapToRing(best.ring, poi.x, poi.z, best.centroid);
+
     const identity = `${restaurant.name || ''}|${restaurant.category}|${restaurant.id || ''}`.toLowerCase();
     const already = best.restaurants.some((r) =>
       `${r.name || ''}|${r.category}|${r.id || ''}`.toLowerCase() === identity ||
@@ -958,6 +1127,10 @@ export function assignRestaurantBusinesses(fs, opts = {}) {
     });
     b.restaurant = b.restaurants[0];
     b.groundUse = 'restaurant';
+    // A POI-mapped restaurant often sits in an otherwise unnamed footprint.
+    // Carry its real identity to the entrance prompt and generated interior;
+    // never overwrite a separately mapped building name.
+    if (!b.name && b.restaurant.name) b.name = b.restaurant.name;
     assigned++;
   }
   return assigned;

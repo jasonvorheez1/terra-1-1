@@ -19,6 +19,7 @@ import { clamp, lerp } from '../../core/util.js';
 import { signGlyphUv } from '../../gfx/textures.js';
 import {
   restaurantSignLabel, restaurantPalette, restaurantFacadeRight,
+  restaurantStorefrontStyle,
 } from '../restaurants.js';
 
 /**
@@ -66,7 +67,7 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng, multi = n
   // ground floor of an apartment block should keep the apartments above while
   // still reading unmistakably as that named restaurant from the pavement.
   if (b.restaurant && door && multi) {
-    addRestaurantStorefront(b, door, ctx, multi, acc, baseY, rng);
+    addRestaurantStorefronts(b, door, ctx, multi, acc, baseY, rng);
   }
 
   switch (kind) {
@@ -163,11 +164,36 @@ export function addArchitecture(b, ring, ctx, acc, collide, geom, rng, multi = n
   }
 }
 
-/** Named sign, cuisine-coloured awning and optional menu board at the entrance. */
-function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
-  const restaurant = b.restaurant;
+/**
+ * Render several real businesses around a shared footprint without allowing a
+ * food court or casino to explode the chunk's geometry budget.
+ */
+export function addRestaurantStorefronts(b, door, ctx, multi, solid, baseY, rng) {
+  const restaurants = b.restaurants?.length ? b.restaurants : [b.restaurant].filter(Boolean);
+  const maxByFrontage = Math.max(1, Math.floor(perimeter(b.ring) / 8));
+  const limit = Math.min(ctx.detail === 'high' ? 8 : 3, maxByFrontage);
+  const used = [];
+
+  for (const restaurant of restaurants) {
+    const targetDoor = restaurant === b.restaurant ? door : restaurant.facadeDoor;
+    if (!targetDoor) continue;
+    // Two providers can pin the same business a metre apart. The data merge
+    // normally removes that duplicate, but the geometry pass has a final guard
+    // so overlapping awnings never z-fight.
+    if (used.some((p) => Math.hypot(p.x - targetDoor.x, p.z - targetDoor.z) < 2.2)) continue;
+    used.push(targetDoor);
+    addRestaurantStorefront(b, targetDoor, ctx, multi, solid, baseY, rng, restaurant);
+    if (used.length >= limit) break;
+  }
+}
+
+/** Named sign, cuisine-coloured awning and optional menu board at one entrance. */
+export function addRestaurantStorefront(
+  b, door, ctx, multi, solid, baseY, rng, restaurant = b.restaurant,
+) {
   const label = restaurantSignLabel(restaurant);
   const palette = restaurantPalette(restaurant, rng);
+  const style = restaurantStorefrontStyle(restaurant);
   const panel = colourToLinear(palette.panel);
   const accent = colourToLinear(palette.accent);
   const white = colourToLinear(0xffffff);
@@ -177,6 +203,10 @@ function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
   // spell every business name backward from the pavement.
   const [ax, az] = restaurantFacadeRight(nx, nz);
   const angle = Math.atan2(nz, nx);
+  const frontPiece = (t, y, along, height, depth, tone, out = depth / 2) =>
+    box(solid, door.x + nx * out + ax * t, y,
+        door.z + nz * out + az * t,
+        depth, height, along, tone, angle);
 
   const available = clamp((door.edgeLength || 7) - 0.45, 2.2, 10.5);
   const charAspect = 0.62;
@@ -208,6 +238,28 @@ function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
       [u0, v0, u1, v1], white);
   }
 
+  // Real imagery is deliberately an asynchronous enrichment: the complete
+  // procedural storefront above appears immediately, then an OSM-linked
+  // Commons photo or Wikidata logo can settle onto it without blocking a
+  // chunk. Only explicitly identified restaurants are queued.
+  if (ctx.detail === 'high' && ctx.restaurantMediaTargets &&
+      (restaurant.commons || restaurant.image || restaurant.brandWikidata ||
+       restaurant.subjectWikidata || restaurant.wikidata)) {
+    ctx.restaurantMediaTargets.push({
+      restaurant,
+      x: door.x,
+      z: door.z,
+      baseY,
+      normal: [nx, nz],
+      right: [ax, az],
+      depth: textDepth + 0.012,
+      available,
+      signWidth: signW,
+      signHeight: signH,
+      signY: centreY,
+    });
+  }
+
   // A shallow entrance awning carries the cuisine/brand accent. Unlike the
   // generic retail awning it is anchored to the real or generated front door.
   const awningW = Math.min(signW + 0.55, available);
@@ -221,12 +273,102 @@ function addRestaurantStorefront(b, door, ctx, multi, solid, baseY, rng) {
       door.z + nz * (awningD - 0.04),
       0.08, 0.46, awningW, shade(accent, 0.82), angle);
 
+  // Storefront architecture follows cuisine/category, then uses the business
+  // identity to vary within that family. These additions are small enough to
+  // stay in the shared solid mesh rather than creating per-restaurant draws.
+  if (style.chrome) {
+    frontPiece(0, baseY + 3.25, signW + 0.35, 0.07, 0.08,
+               colourToLinear(0xc2c7c9), 0.11);
+    frontPiece(0, baseY + 0.42, Math.min(available, signW + 0.8), 0.12, 0.07,
+               colourToLinear(0xb8bdc0), 0.09);
+  }
+
+  if (style.stripedAwning) {
+    const stripes = style.stripes;
+    const stripeW = awningW / stripes;
+    for (let i = 0; i < stripes; i++) {
+      const t = -awningW / 2 + stripeW * (i + 0.5);
+      frontPiece(t, baseY + 2.78, stripeW * 0.88, 0.43, 0.055,
+                 i % 2 ? panel : accent, awningD - 0.005);
+    }
+  }
+
+  if (style.curtain) {
+    const panels = 4 + (style.variant % 2);
+    const total = Math.min(awningW * 0.82, 3.4);
+    const panelW = total / panels;
+    for (let i = 0; i < panels; i++) {
+      const t = -total / 2 + panelW * (i + 0.5);
+      frontPiece(t, baseY + 2.52, panelW * 0.88, 0.62, 0.045,
+                 i % 2 ? shade(panel, 1.08) : accent, awningD - 0.01);
+    }
+  }
+
+  if (style.tiled) {
+    const tiles = 5 + style.variant;
+    const tileW = Math.min(available, signW + 0.7) / tiles;
+    for (let i = 0; i < tiles; i++) {
+      const t = (i - (tiles - 1) / 2) * tileW;
+      frontPiece(t, baseY + 0.31, tileW * 0.78, 0.28, 0.055,
+                 i % 2 ? accent : shade(panel, 1.12), 0.07);
+    }
+  }
+
+  if (style.projectingSign && available > 3.1) {
+    const side = Math.min(available / 2 - 0.3, signW / 2 + 0.35);
+    const bladeW = 0.72 + style.variant * 0.07;
+    // Wide axis points out from the wall; its thin axis lies along it.
+    box(solid,
+        door.x + ax * side + nx * bladeW * 0.52, baseY + 3.42,
+        door.z + az * side + nz * bladeW * 0.52,
+        bladeW, 0.72, 0.10, panel, angle);
+    frontPiece(side, baseY + 3.86, 0.12, 0.22, bladeW + 0.18,
+               colourToLinear(0x3d3b37), (bladeW + 0.18) / 2);
+  }
+
+  // Takeaway service is visible as a separate hatch instead of only existing
+  // as metadata. It sits on the side with more spare frontage.
+  if (restaurant.takeaway === 'yes' || restaurant.takeaway === 'only') {
+    const t = Math.min(available / 2 - 0.7, 1.55);
+    frontPiece(-t, baseY + 1.48, 1.05, 0.84, 0.045,
+               colourToLinear(0x52636a), 0.065);
+    frontPiece(-t, baseY + 1.02, 1.16, 0.08, 0.22,
+               shade(accent, 0.82), 0.11);
+  }
+
+  // Drive-through canopies need supports or they read as floating slabs.
+  if (restaurant.driveThrough) {
+    const post = colourToLinear(0x4a4c4e);
+    for (const t of [-awningW * 0.43, awningW * 0.43]) {
+      box(solid, door.x + nx * (awningD - 0.14) + ax * t, baseY + 1.43,
+          door.z + nz * (awningD - 0.14) + az * t,
+          0.10, 2.78, 0.10, post, angle);
+    }
+  }
+
   if (restaurant.outdoorSeating && (door.edgeLength || 0) > 3.2) {
     const side = Math.min(1.4, signW * 0.35);
     box(solid,
         door.x + nx * 0.55 + ax * (signW / 2 + 0.42), baseY + 0.78,
         door.z + nz * 0.55 + az * (signW / 2 + 0.42),
         0.08, 1.35, side, shade(panel, 0.78), angle);
+
+    // Two compact cafe tables, aligned with the real entrance facade. They are
+    // decorative and intentionally non-colliding so they cannot trap a spawn.
+    const tables = Math.min(2, 1 + (style.variant % 2));
+    for (let i = 0; i < tables; i++) {
+      const t = (i - (tables - 1) / 2) * 1.55;
+      const tx = door.x + nx * 2.05 + ax * t;
+      const tz = door.z + nz * 2.05 + az * t;
+      cylinder(solid, tx, baseY, tz, 0.055, 0.055, 0.68,
+               colourToLinear(0x4c4d4d), 7);
+      cylinder(solid, tx, baseY + 0.68, tz, 0.42, 0.42, 0.055,
+               shade(accent, 0.84), 12);
+      for (const chairT of [-0.68, 0.68]) {
+        box(solid, tx + ax * chairT, baseY + 0.42, tz + az * chairT,
+            0.42, 0.08, 0.38, shade(panel, 0.92), angle);
+      }
+    }
   }
 }
 

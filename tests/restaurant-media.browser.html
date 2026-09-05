@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Restaurant media browser check</title>
+  <script type="importmap">
+  {"imports":{"three":"../vendor/three.module.js"}}
+  </script>
+  <style>
+    html,body { margin:0; height:100%; overflow:hidden; background:#17202a; color:#fff;
+      font:15px system-ui,sans-serif; }
+    canvas { display:block; width:100%; height:100%; }
+    #status { position:fixed; left:18px; bottom:18px; max-width:min(720px,calc(100% - 72px));
+      padding:12px 15px; background:#111c; border:1px solid #ffffff33; border-radius:8px; }
+  </style>
+</head>
+<body>
+<div id="status" role="status">Resolving an exact Wikidata restaurant brand…</div>
+<script type="module">
+  import * as THREE from 'three';
+  import { resolveRestaurantMedia } from '../src/world/restaurant-media.js';
+  import { makeRestaurantMediaMesh } from '../src/world/restaurant-media-render.js';
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  document.body.prepend(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9db3c1);
+  const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 100);
+  camera.position.set(0, 3.1, 9);
+  camera.lookAt(0, 2.5, 0);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x5c5147, 2.1));
+  const sun = new THREE.DirectionalLight(0xfff2d8, 2.6);
+  sun.position.set(5, 9, 7);
+  scene.add(sun);
+
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(9, 5.5, 0.35),
+    new THREE.MeshStandardMaterial({ color: 0x917f6b, roughness: 0.9 }),
+  );
+  wall.position.set(0, 2.75, -0.2);
+  scene.add(wall);
+  const fascia = new THREE.Mesh(
+    new THREE.BoxGeometry(6.2, 1.15, 0.18),
+    new THREE.MeshStandardMaterial({ color: 0x253c30, roughness: 0.72 }),
+  );
+  fascia.position.set(0, 3.75, 0.08);
+  scene.add(fascia);
+  const door = new THREE.Mesh(
+    new THREE.BoxGeometry(1.25, 2.45, 0.12),
+    new THREE.MeshStandardMaterial({ color: 0x26343a, roughness: 0.35 }),
+  );
+  door.position.set(0, 1.23, 0.11);
+  scene.add(door);
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(30, 20),
+    new THREE.MeshStandardMaterial({ color: 0x5c6262, roughness: 1 }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+
+  const status = document.getElementById('status');
+  const media = await resolveRestaurantMedia({
+    name: 'Starbucks', brand: 'Starbucks', brandWikidata: 'Q37158',
+  });
+  if (!media) {
+    status.textContent = 'FAILED: no licensed Wikimedia media resolved';
+  } else {
+    const mesh = makeRestaurantMediaMesh(media, {
+      restaurant: { name: 'Starbucks' },
+      x: 0, z: 0, baseY: 0,
+      normal: [0, 1], right: [1, 0], depth: 0.2,
+      available: 8, signWidth: 6, signHeight: 0.9, signY: 3.75,
+    });
+    scene.add(mesh);
+    status.textContent = `PASS — ${media.title} · ${media.artist} · ${media.licence} · aspect preserved`;
+  }
+
+  function frame() { renderer.render(scene, camera); requestAnimationFrame(frame); }
+  frame();
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+</script>
+</body>
+</html>

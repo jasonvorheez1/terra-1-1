@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { Projection } from '../src/geo/projection.js';
-import { tilesForBBox } from '../src/geo/overture.js';
 import {
-  FeatureSet, mergeOvertureBuildings, approximateBuildingIoU,
+  tilesForBBox, overtureRestaurantCategory, overtureRestaurantRecord,
+} from '../src/geo/overture.js';
+import {
+  FeatureSet, mergeOvertureBuildings, mergeOvertureRestaurantPlaces,
+  approximateBuildingIoU,
 } from '../src/world/features.js';
 import { bounds, centroid, area } from '../src/world/geometry.js';
 import { buildingHeights, facadeSpec, featureRng, buildingEra } from '../src/world/osm-tags.js';
@@ -123,6 +126,68 @@ test('underground Overture structures are omitted', () => {
   const stats = mergeOvertureBuildings(fs, [rec], projection);
   assert.equal(stats.invalid, 1);
   assert.equal(fs.buildings.length, 0);
+});
+
+test('Overture place taxonomy becomes restaurant identity and cuisine hints', () => {
+  const props = {
+    id: 'place-1',
+    names: JSON.stringify({ primary: 'El Rincón', common: { en: 'The Corner' } }),
+    taxonomy: JSON.stringify({
+      primary: 'mexican_restaurant',
+      hierarchy: ['food_and_drink', 'restaurant', 'mexican_restaurant'],
+    }),
+    basic_category: 'restaurant',
+    websites: JSON.stringify(['https://example.test/menu']),
+    brand: JSON.stringify({ names: { primary: 'Rincón Group' }, wikidata: 'Q123' }),
+    confidence: 0.91,
+    operating_status: 'open',
+  };
+  assert.equal(overtureRestaurantCategory(props), 'restaurant');
+  assert.equal(overtureRestaurantCategory({
+    taxonomy: JSON.stringify({
+      primary: 'music_venue', hierarchy: ['arts_and_entertainment', 'music_venue'],
+      alternates: ['bar'],
+    }),
+  }), null);
+  assert.equal(overtureRestaurantCategory({
+    taxonomy: JSON.stringify({
+      primary: 'oxygen_bar', hierarchy: ['health_and_medical', 'oxygen_bar'],
+    }),
+  }), null);
+  const record = overtureRestaurantRecord(props, [-93.9277, 36.92895]);
+  assert.equal(record.name, 'El Rincón');
+  assert.equal(record.signName, 'The Corner');
+  assert.deepEqual(record.cuisines, ['mexican']);
+  assert.equal(record.website, 'https://example.test/menu');
+  assert.equal(record.brand, 'Rincón Group');
+  assert.equal(record.brandWikidata, 'Q123');
+  assert.equal(overtureRestaurantRecord({
+    ...props, id: 'not-food', names: JSON.stringify({ primary: 'Downtown Oxygen Bar' }),
+  }, [-93.9277, 36.92895]), null);
+});
+
+test('confident Overture restaurants fill POI gaps while live OSM wins duplicates', () => {
+  const at = projection.toGeo(5, 7);
+  const record = {
+    id: 'place-gap', lon: at.lon, lat: at.lat, name: 'Small Town Grill',
+    signName: 'Small Town Grill', category: 'restaurant', cuisines: ['american'],
+    confidence: 0.87, operatingStatus: 'open', sources: [],
+  };
+  const fs = new FeatureSet();
+  let stats = mergeOvertureRestaurantPlaces(fs, [record], projection);
+  assert.equal(stats.added, 1);
+  assert.equal(fs.pois[0].tags.name, 'Small Town Grill');
+  assert.equal(fs.pois[0].tags.source, 'Overture Maps Foundation');
+
+  const withOsm = new FeatureSet();
+  withOsm.pois.push({
+    id: 4, x: 5.5, z: 7, name: 'Small Town Grill', category: 'restaurant',
+    tags: { amenity: 'restaurant', name: 'Small Town Grill' },
+  });
+  stats = mergeOvertureRestaurantPlaces(withOsm, [record], projection);
+  assert.equal(stats.added, 0);
+  assert.equal(stats.duplicates, 1);
+  assert.equal(withOsm.pois.length, 1);
 });
 
 console.log(out.join('\n'));

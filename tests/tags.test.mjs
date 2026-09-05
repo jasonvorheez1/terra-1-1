@@ -149,6 +149,12 @@ test('kerbside parking widens the tagged carriageway', () => {
   const plain = T.roadSpec({ highway: 'residential', lanes: '2' });
   const parked = T.roadSpec({ highway: 'residential', lanes: '2', 'parking:both': 'lane' });
   assert.ok(parked.width > plain.width + 4, `${plain.width} -> ${parked.width}`);
+  assert.equal(T.roadSpec({ highway: 'residential', 'parking:both': 'no' }).width, plain.width,
+               'parking=no must not create two phantom parking lanes');
+  assert.equal(T.roadSpec({ highway: 'residential', 'parking:both': 'street_side' }).width, plain.width,
+               'off-carriageway parking must not widen the road');
+  assert.ok(T.roadSpec({ highway: 'residential', 'parking:left': 'lane' }).width > plain.width + 2,
+            'one mapped parking lane widens one side only');
 });
 
 test('tunnels and bridges get a layer even when untagged', () => {
@@ -185,6 +191,25 @@ test('sidewalk=no suppresses generated sidewalks', () => {
   assert.equal(T.roadSpec({ highway: 'secondary', sidewalk: 'no' }).sidewalk, false);
   assert.equal(T.roadSpec({ highway: 'service' }).sidewalk, false);
   assert.equal(T.roadSpec({ highway: 'secondary', tunnel: 'yes' }).sidewalk, false);
+  const left = T.roadSpec({ highway: 'secondary', sidewalk: 'left' });
+  assert.equal(left.sidewalk, true);
+  assert.equal(left.sidewalkLeft, true);
+  assert.equal(left.sidewalkRight, false);
+  const separate = T.roadSpec({ highway: 'secondary', sidewalk: 'separate' });
+  assert.equal(separate.sidewalkLeft, false);
+  assert.equal(separate.sidewalkRight, false);
+});
+
+test('directional and shared lanes contribute to the total lane count', () => {
+  const spec = T.roadSpec({
+    highway: 'primary', 'lanes:forward': '2', 'lanes:backward': '1',
+    'lanes:both_ways': '1',
+  });
+  assert.equal(spec.lanes, 4);
+  assert.equal(spec.lanesForward, 2);
+  assert.equal(spec.lanesBackward, 1);
+  assert.equal(spec.lanesBothWays, 1);
+  assert.equal(T.roadSpec({ highway: 'primary', lane_markings: 'no' }).markings, false);
 });
 
 test('rail specs cover subways and trams', () => {

@@ -674,18 +674,20 @@ export function roadSpec(tags) {
   // `lanes` is frequently absent on ways that carry lanes:forward and
   // lanes:backward instead - common on anything with an asymmetric layout.
   let lanes = parseCount(tags['lanes']);
+  const lanesForward = parseCount(tags['lanes:forward']) || 0;
+  const lanesBackward = parseCount(tags['lanes:backward']) || 0;
+  const lanesBothWays = parseCount(tags['lanes:both_ways']) || 0;
   if (lanes == null) {
-    const fwd = parseCount(tags['lanes:forward']);
-    const back = parseCount(tags['lanes:backward']);
-    if (fwd != null || back != null) lanes = (fwd || 0) + (back || 0);
+    if (lanesForward || lanesBackward || lanesBothWays) {
+      lanes = lanesForward + lanesBackward + lanesBothWays;
+    }
   }
   // On-street parking is most of a lane either side, and it is tagged far more
   // often than width is - so it belongs on the class default as much as on a
   // lane count. A residential street with parking both sides is nearer eleven
   // metres kerb to kerb than six.
-  const parking = (tags['parking:both'] || tags['parking:lane:both']) ? 4.2
-    : (tags['parking:left'] || tags['parking:right'] ||
-       tags['parking:lane:left'] || tags['parking:lane:right']) ? 2.1 : 0;
+  const parkingSides = parkingLaneSides(tags);
+  const parking = (parkingSides.left ? 2.1 : 0) + (parkingSides.right ? 2.1 : 0);
 
   if (width == null && lanes != null && lanes > 0 && cls.lanes > 0) {
     const laneWidth = cls.kind === 'motorway' ? 3.65 : cls.kind === 'major' ? 3.35 : 3.0;
@@ -725,6 +727,9 @@ export function roadSpec(tags) {
   const isPavement = tags['footway'] === 'sidewalk' || tags['path'] === 'sidewalk';
   const isCrossing = tags['footway'] === 'crossing' || tags['path'] === 'crossing' ||
                      tags['cycleway'] === 'crossing';
+  const sidewalkSides = resolveSidewalkSides(tags, cls.sidewalk);
+  const laneMarkings = !isFalsy(tags['lane_markings']) && !isFalsy(tags['markings']);
+  const crossingStyle = String(tags['crossing:markings'] || tags['crossing'] || '').toLowerCase();
 
   return {
     highway: hw,
@@ -732,6 +737,9 @@ export function roadSpec(tags) {
     kind: cls.kind,
     width,
     lanes: lanes || cls.lanes,
+    lanesForward,
+    lanesBackward,
+    lanesBothWays,
     oneway,
     tunnel,
     bridge,
@@ -740,17 +748,21 @@ export function roadSpec(tags) {
     level: parseCount(tags['level']),
     surface,
     area,
-    markings: cls.markings && !tunnel,
+    markings: cls.markings && laneMarkings && !tunnel,
     // The road's own tag beats the class default in both directions. It used
     // to be able to veto a pavement but never ask for one, so a service road
     // or a trunk tagged `sidewalk=both` got none - and, more to the point, the
     // default gave every American residential street a pavement whether or not
     // it has one. Where the tag is silent the class default still decides.
-    sidewalk: (sidewalkTagged(tags) ?? cls.sidewalk) && !tunnel && !bridge,
+    sidewalk: sidewalkSides.any && !tunnel && !bridge,
+    sidewalkLeft: sidewalkSides.left && !tunnel && !bridge,
+    sidewalkRight: sidewalkSides.right && !tunnel && !bridge,
+    sidewalkTagged: sidewalkSides.tagged,
     // A pavement way is raised on a kerb; a crossing is flush, because that is
     // the point of a crossing.
     pavement: !!isPavement && !isCrossing && !bridge && !tunnel,
     crossing: !!isCrossing,
+    crossingMarked: !!isCrossing && crossingStyle !== 'unmarked' && crossingStyle !== 'no',
     name: tags['name'] || tags['ref'] || null,
     maxspeed: parseCount(tags['maxspeed']),
     steps: hw === 'steps',
@@ -762,16 +774,39 @@ export function roadSpec(tags) {
   };
 }
 
-/** `sidewalk=no` means no sidewalk; anything else leaves it to the class default. */
-function sidewalkTagged(tags) {
-  const yes = (v) => v && v !== 'no' && v !== 'none' && v !== 'separate';
-  const s = tags['sidewalk'] || tags['sidewalk:both'];
-  if (s) return yes(s) ? true : false;
-  // Sides are tagged separately as often as they are tagged together, and
-  // `sidewalk=left` is a real answer that the combined key never sees.
-  const l = tags['sidewalk:left'], r = tags['sidewalk:right'];
-  if (l || r) return yes(l) || yes(r);
-  return null;
+/** Preserve which side of the directed way a mapped sidewalk occupies. */
+function resolveSidewalkSides(tags, classDefault) {
+  const present = (v) => !!(v && !['no', 'none', 'separate'].includes(String(v).toLowerCase()));
+  const combined = String(tags['sidewalk'] || tags['sidewalk:both'] || '').toLowerCase();
+  if (combined) {
+    if (combined === 'left') return { left: true, right: false, any: true, tagged: true };
+    if (combined === 'right') return { left: false, right: true, any: true, tagged: true };
+    const both = present(combined);
+    return { left: both, right: both, any: both, tagged: true };
+  }
+  const hasLeft = tags['sidewalk:left'] != null;
+  const hasRight = tags['sidewalk:right'] != null;
+  if (hasLeft || hasRight) {
+    const left = hasLeft ? present(tags['sidewalk:left']) : false;
+    const right = hasRight ? present(tags['sidewalk:right']) : false;
+    return { left, right, any: left || right, tagged: true };
+  }
+  const fallback = !!classDefault;
+  return { left: fallback, right: fallback, any: fallback, tagged: false };
+}
+
+/** Count only parking which occupies the carriageway, never `no`/off-street. */
+function parkingLaneSides(tags) {
+  const lane = (side) => {
+    const modern = tags[`parking:${side}`];
+    const legacy = tags[`parking:lane:${side}`];
+    const value = String(modern != null ? modern : legacy != null ? legacy : '').toLowerCase();
+    return ['lane', 'parallel', 'diagonal', 'perpendicular', 'marked', 'yes'].includes(value);
+  };
+  const bothValue = String(tags['parking:both'] != null ? tags['parking:both']
+    : tags['parking:lane:both'] != null ? tags['parking:lane:both'] : '').toLowerCase();
+  const both = ['lane', 'parallel', 'diagonal', 'perpendicular', 'marked', 'yes'].includes(bothValue);
+  return { left: both || lane('left'), right: both || lane('right') };
 }
 
 /** Rail geometry for `railway=*`. */

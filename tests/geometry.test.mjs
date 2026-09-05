@@ -268,6 +268,15 @@ test('ribbon keeps its width through a right-angle corner', () => {
   assert.ok(w > 4 && w < 6.5, `mitred corner width ${w}`);
 });
 
+test('ribbon miter cannot grow a long spike at a hairpin', () => {
+  const pts = [[0, 0], [10, 0], [0.2, 1]];
+  const edges = G.ribbon(pts, 10);
+  const reach = Math.max(
+    Math.hypot(edges.left[1][0] - 10, edges.left[1][1]),
+    Math.hypot(edges.right[1][0] - 10, edges.right[1][1]));
+  assert.ok(reach <= 10.001, `miter reaches ${reach.toFixed(2)}m from a 10m-wide road`);
+});
+
 test('ribbonToRing produces a ring of the right area', () => {
   const ring = G.ribbonToRing([[0, 0], [50, 0]], 8);
   assert.ok(Math.abs(G.area(ring) - 400) < 1e-6, `area ${G.area(ring)}`);

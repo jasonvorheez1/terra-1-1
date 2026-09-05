@@ -14,12 +14,22 @@ import { Projection, haversine } from '../geo/projection.js';
 import { elevation } from '../geo/elevation.js';
 import { ndvi, classifyBiome, seasonalPhase } from '../geo/nasa.js';
 import { RegionLoader } from '../geo/overpass.js';
-import { extractFeatures, mergeOvertureBuildings, mergeOvertureRoads, assignEntrances, assignRestaurantBusinesses, verticalProfile, inferMissingHeights, inferBuildingKinds, inferSuburbanHousing, FeatureSet } from './features.js';
+import {
+  extractFeatures, mergeOvertureBuildings, mergeOvertureRoads,
+  mergeOvertureRestaurantPlaces, assignEntrances, assignRestaurantBusinesses,
+  verticalProfile, inferMissingHeights, inferBuildingKinds,
+  inferSuburbanHousing, FeatureSet,
+} from './features.js';
 import { buildGradingField } from './build/grading.js';
 import { MultiMesh, clipHalfPlane, colourToLinear } from './build/mesh.js';
 import { buildTerrain, terrainCollision, buildLandcover, buildWater, fetchChunkImagery, biomeGroundColour } from './build/ground.js';
 import { buildBuildings, reconcileBuildingParts } from './build/buildings.js';
 import { buildRoad, buildRail } from './build/roads.js';
+import { drivingSideForCountry } from './road-layout.js';
+import { resolveRestaurantMedia } from './restaurant-media.js';
+import {
+  makeRestaurantMediaMesh, disposeRestaurantMedia,
+} from './restaurant-media-render.js';
 import { buildProps, buildBarriers } from './build/props.js';
 import { collectTrees, buildTreeInstances, GroundCover } from './build/vegetation.js';
 import { CollisionBuilder, CollisionWorld, SURFACE_IDS } from '../physics/collider.js';
@@ -65,11 +75,16 @@ class Chunk {
     this.waterMesh = null;
     this.triangles = 0;
     this.buildMs = 0;
+    this.restaurantMediaPending = false;
   }
 
   dispose(scene, collisionWorld) {
     scene.remove(this.group);
     this.group.traverse((o) => {
+      if (o.userData?.ownedRestaurantMedia) {
+        disposeRestaurantMedia(o);
+        return;
+      }
       if (o.geometry) o.geometry.dispose();
       // Materials are shared library instances; never dispose them here.
     });
@@ -88,10 +103,13 @@ export class World {
 
     this.projection = new Projection(0, 0);
     this.origin = { lat: 0, lon: 0 };
+    this.countryCode = null;
+    this.drivingSide = 'right';
     this.regions = new RegionLoader({
       sizeM: settings.data.regionSize,
       marginM: 220,
       useOvertureBuildings: settings.data.useOvertureBuildings,
+      useOverturePlaces: settings.data.useOverturePlaces,
     });
     this.collisionWorld = new CollisionWorld();
 
@@ -114,6 +132,7 @@ export class World {
       regions: 0, lastBuildMs: 0,
     };
     this.errors = [];
+    this.restaurantMediaCredits = new Map();
     this.onStatus = null;
   }
 
@@ -135,6 +154,7 @@ export class World {
       // Which part of the world we are in, for the facade palettes and the
       // tree species tables. Set once per session from the origin.
       get region() { return this.__world.region; },
+      get drivingSide() { return this.__world.drivingSide; },
       get season() { return this.__world.season; },
       // The chunk being built may ask for less than the quality setting allows;
       // see chunkDetailFor.
@@ -157,12 +177,13 @@ export class World {
    * Move the world to a new place. Everything already built is thrown away:
    * the local tangent plane is anchored here now.
    */
-  async setLocation(lat, lon, { date = new Date(), onProgress = null } = {}) {
+  async setLocation(lat, lon, { date = new Date(), countryCode = null, onProgress = null } = {}) {
     this.clear();
     this.origin = { lat, lon };
     this.projection.setOrigin(lat, lon);
     // Facade palettes are regional; a session has one location.
     this.region = setFacadeRegion(lat, lon);
+    this.setCountryCode(countryCode);
     this.date = date;
     this.ready = false;
 
@@ -193,6 +214,7 @@ export class World {
     if (onProgress) onProgress(0.4, 'Downloading streets and building footprints');
     this.regions.sizeM = this.settings.data.regionSize;
     this.regions.useOvertureBuildings = this.settings.data.useOvertureBuildings;
+    this.regions.useOverturePlaces = this.settings.data.useOverturePlaces;
 
     // Ask for the centre region and nothing else. Public Overpass instances
     // serve one query at a time, and a dense city region is several megabytes,
@@ -234,6 +256,12 @@ export class World {
     return { biome: this.biome, elevation: groundElevation, ndvi: ndviHere };
   }
 
+  /** Update a session's traffic convention before its chunks are generated. */
+  setCountryCode(countryCode) {
+    this.countryCode = countryCode ? String(countryCode).trim().toUpperCase() : null;
+    this.drivingSide = drivingSideForCountry(this.countryCode);
+  }
+
   clear() {
     for (const chunk of this.chunks.values()) chunk.dispose(this.scene, this.collisionWorld);
     this.chunks.clear();
@@ -245,6 +273,7 @@ export class World {
     this.collisionWorld.clear();
     this.grading = null;
     this.errors.length = 0;
+    this.restaurantMediaCredits.clear();
     this.groundCover.dispose();
   }
 
@@ -325,6 +354,12 @@ export class World {
     fs.__overture = mergeOvertureBuildings(
       fs,
       region.overtureBuildings,
+      this.projection,
+      { seen: this.seenFeatures },
+    );
+    fs.__overturePlaces = mergeOvertureRestaurantPlaces(
+      fs,
+      region.overturePlaces,
       this.projection,
       { seen: this.seenFeatures },
     );
@@ -411,6 +446,12 @@ export class World {
         Object.assign(clone, feature);
         clone.pts = run;
         clone.__parent = feature;
+        if (feature.junctionPatches) {
+          const [chunkX, chunkZ] = key.split(',').map(Number);
+          clone.junctionPatches = feature.junctionPatches.filter((patch) =>
+            Math.floor(patch.x / CHUNK_SIZE) === chunkX &&
+            Math.floor(patch.z / CHUNK_SIZE) === chunkZ);
+        }
         get(key)[listName].push(clone);
       }
     }
@@ -772,7 +813,10 @@ export class World {
     // Buildings.
     collide.surface(SURFACE_IDS.concrete);
     const buildingList = fs.buildings.concat(fs.buildingParts);
+    ctx.restaurantMediaTargets = [];
     buildBuildings(buildingList, ctx, multi, { detail: ctx.detail, collide });
+    const restaurantMediaTargets = ctx.restaurantMediaTargets;
+    ctx.restaurantMediaTargets = null;
     for (const b of buildingList) {
       if (b.hasParts) continue;
       const g = lowestGround(b.ring, ctx.terrainAt);
@@ -815,10 +859,56 @@ export class World {
     this.chunks.set(chunk.key, chunk);
     this.chunkDetail = null;              // back to the quality setting
 
+    if (restaurantMediaTargets.length) {
+      this.decorateRestaurantMedia(chunk, restaurantMediaTargets);
+    }
+
     // Satellite drape arrives asynchronously and swaps in when it lands.
     if (this.settings.graphics.groundStyle === 'aerial') this.drapeImagery(chunk);
 
     return chunk;
+  }
+
+  /** Add optional Commons/Wikidata restaurant media after core geometry lands. */
+  async decorateRestaurantMedia(chunk, targets) {
+    if (!chunk || chunk.restaurantMediaPending) return;
+    chunk.restaurantMediaPending = true;
+    const unique = [];
+    const seen = new Set();
+    for (const target of targets) {
+      const r = target.restaurant;
+      const key = `${r.id || ''}|${r.name || ''}|${r.wikidata || ''}|${r.image || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(target);
+      if (unique.length >= 6) break; // protect dense food courts from request storms
+    }
+
+    await Promise.allSettled(unique.map(async (target) => {
+      const media = await resolveRestaurantMedia(target.restaurant);
+      const current = this.chunks.get(chunk.key);
+      if (!media) return;
+      if (current !== chunk || chunk.state !== 'ready') {
+        if (media.image && typeof media.image.close === 'function') media.image.close();
+        return;
+      }
+      const mesh = makeRestaurantMediaMesh(media, target);
+      if (!mesh) {
+        if (media.image && typeof media.image.close === 'function') media.image.close();
+        return;
+      }
+      chunk.group.add(mesh);
+      mesh.updateMatrixWorld(true);
+      this.restaurantMediaCredits.set(media.sourceUrl, {
+        restaurant: target.restaurant.name || target.restaurant.brand || 'Restaurant',
+        title: media.title,
+        artist: media.attribution || media.artist,
+        licence: media.licence,
+        licenceUrl: media.licenceUrl,
+        sourceUrl: media.sourceUrl,
+      });
+    }));
+    if (this.chunks.get(chunk.key) === chunk) chunk.restaurantMediaPending = false;
   }
 
   async drapeImagery(chunk) {
