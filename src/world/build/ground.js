@@ -336,6 +336,9 @@ export function buildLandcover(list, ctx, multi, collide) {
         uvScale: 0.16,
         heightFn: (x, z) => ctx.terrainAt(x, z) + lift,
         colourFn: vary,
+        // The terrain itself samples every 4 m at full detail, so there is no
+        // ground detail finer than this for the drape to miss.
+        maxEdge: 6,
       });
     } catch (e) {
       if (ctx.onError) ctx.onError('landcover', lc.source, e);

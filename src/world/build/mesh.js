@@ -8,6 +8,69 @@
 import * as THREE from 'three';
 import { triangulate, signedArea2 } from '../geometry.js';
 
+/**
+ * Split a triangulation until no edge is longer than `maxEdge`.
+ *
+ * A polygon draped over terrain only samples the ground where it has
+ * vertices, and an OSM ring has vertices where the mapper clicked - along its
+ * boundary, never inside it. Ear clipping then spans the interior with a
+ * handful of long triangles that cut straight across whatever the ground does
+ * underneath, so a park the size of a chunk floats over its own dips: measured
+ * in Central Park, a grass polygon sat 2.75 m above the terrain it was supposed
+ * to be lying on, and since these surfaces carry no collision of their own you
+ * walk through them on the way to the ground. Subdividing first gives the drape
+ * interior points to sample.
+ *
+ * Midpoints are shared between the triangles either side of an edge, so the
+ * result stays watertight - splitting each triangle alone would crack the seams
+ * open. The cap is a guard against a pathological ring, not a target.
+ */
+function subdivide(vertices, indices, maxEdge) {
+  const verts = Array.from(vertices);
+  let tris = Array.from(indices);
+  const limit = maxEdge * maxEdge;
+  const MAX_VERTS = 20000;
+  const mids = new Map();
+  const midpoint = (a, b) => {
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    let m = mids.get(key);
+    if (m === undefined) {
+      m = verts.length / 2;
+      verts.push((verts[a * 2] + verts[b * 2]) / 2, (verts[a * 2 + 1] + verts[b * 2 + 1]) / 2);
+      mids.set(key, m);
+    }
+    return m;
+  };
+  const long2 = (a, b) => {
+    const dx = verts[a * 2] - verts[b * 2], dz = verts[a * 2 + 1] - verts[b * 2 + 1];
+    return dx * dx + dz * dz;
+  };
+  // Area features are clipped to a 256 m chunk, so the longest edge to start
+  // from is a ~362 m diagonal. Each pass halves the longest edge of a
+  // triangle, so reaching 6 m takes twelve; eight left it at 8.8 m.
+  for (let pass = 0; pass < 14; pass++) {
+    let split = false;
+    const next = [];
+    for (let i = 0; i < tris.length; i += 3) {
+      const a = tris[i], b = tris[i + 1], c = tris[i + 2];
+      const ab = long2(a, b), bc = long2(b, c), ca = long2(c, a);
+      if (Math.max(ab, bc, ca) <= limit || verts.length / 2 >= MAX_VERTS) {
+        next.push(a, b, c);
+        continue;
+      }
+      // Split the longest edge only. Repeated passes reach the rest, and
+      // bisecting the longest edge keeps the triangles from growing slivers.
+      split = true;
+      if (ab >= bc && ab >= ca) { const m = midpoint(a, b); next.push(a, m, c, m, b, c); }
+      else if (bc >= ca) { const m = midpoint(b, c); next.push(b, m, a, m, c, a); }
+      else { const m = midpoint(c, a); next.push(c, m, b, m, a, b); }
+    }
+    tris = next;
+    if (!split) break;
+  }
+  return { vertices: verts, indices: tris };
+}
+
 export class MeshAccumulator {
   constructor(hasUv = true, hasColor = true) {
     this.positions = [];
@@ -59,14 +122,17 @@ export class MeshAccumulator {
    */
   addPolygon(ring, holes, y, colour, {
     uvScale = 0.25, uvScaleV = null, faceUp = true, heightFn = null,
-    normalFn = null, uvOrigin = [0, 0], colourFn = null,
+    normalFn = null, uvOrigin = [0, 0], colourFn = null, maxEdge = 0,
   } = {}) {
     // A separate V scale lets a surface be mapped into someone else's texture
     // space - a roof into the chunk's aerial photograph, say, where V runs the
     // other way from world Z.
     const vScale = uvScaleV === null ? uvScale : uvScaleV;
-    const { vertices, indices } = triangulate(ring, holes);
+    let { vertices, indices } = triangulate(ring, holes);
     if (!indices.length) return 0;
+    // Draping is only as good as the polygon's own vertices, so give a big
+    // one some interior points before sampling the ground.
+    if (maxEdge > 0 && heightFn) ({ vertices, indices } = subdivide(vertices, indices, maxEdge));
     const [r, g, b] = colour;
     const base = this.count;
     const n = vertices.length / 2;
