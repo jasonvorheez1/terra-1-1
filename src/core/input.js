@@ -40,6 +40,10 @@ export class Input {
     this.enabled = false;           // only true while actually playing
 
     this.mouseButtons = new Set();
+    // Mouse presses as edges rather than state. Voxel mode mines on hold and
+    // places on press, and telling those apart needs the frame the button
+    // went down, not just that it is down.
+    this.mouseButtonsPressed = new Set();
     this.dragLooking = false;       // click-drag fallback when pointer lock fails
     this.gamepadIndex = null;
     this.gamepadState = { lx: 0, ly: 0, rx: 0, ry: 0, buttons: [] };
@@ -78,6 +82,7 @@ export class Input {
       // Never leave a key stuck down when the window loses focus.
       this.down.clear();
       this.mouseButtons.clear();
+      this.mouseButtonsPressed.clear();
       this.dragLooking = false;
       this.lookX = this.lookY = 0;
     };
@@ -106,6 +111,7 @@ export class Input {
       this.lookY += dy * s.mouseSensitivity * inv;
     };
     this._mouseDown = (e) => {
+      if (!this.mouseButtons.has(e.button)) this.mouseButtonsPressed.add(e.button);
       this.mouseButtons.add(e.button);
       if (e.button === 0 && this.enabled && !this.pointerLocked) {
         this.dragLooking = true;
@@ -315,8 +321,15 @@ export class Input {
   endFrame() {
     this.pressedThisFrame.clear();
     this.releasedThisFrame.clear();
+    this.mouseButtonsPressed.clear();
     this.wheel = 0;
   }
+
+  /** Is a mouse button held? 0 left, 1 middle, 2 right. */
+  mouseDown(button) { return this.mouseButtons.has(button); }
+
+  /** Did a mouse button go down this frame? */
+  mouseWasPressed(button) { return this.mouseButtonsPressed.has(button); }
 
   /** Ask the rebinding UI for the next key pressed. */
   captureKey(callback) { this.captureNext = callback; }

@@ -79,7 +79,7 @@
       </nav>
     </div>
     <footer class="attrib">
-      Map data © OpenStreetMap contributors · Elevation: AWS Terrain Tiles ·
+      Map data © OpenStreetMap contributors · Gap fills: Overture Maps Foundation · Elevation: AWS Terrain Tiles ·
       Landscape: OSM + NASA biome data · Optional imagery: Esri World Imagery
     </footer>
   </section>
@@ -202,7 +202,16 @@
               <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>,
               queried live through the Overpass API. Heights, storey counts, roof shapes,
               materials and colours are read from the tags where mappers have supplied
-              them, and inferred from building type and footprint where they have not.</li>
+              them, and inferred from building type and footprint where they have not.
+              Monthly <a href="https://overturemaps.org/" target="_blank" rel="noopener">Overture Maps</a>
+              tiles fill missing building footprints and provide road fallback if Overpass is unavailable.</li>
+          <li><strong>Restaurant identity</strong> — live OSM businesses first, completed by
+              confidence-filtered open businesses from Overture Places. OSM duplicates and
+              permanently closed or low-confidence fallback records are rejected. Overture
+              Places includes data under CDLA Permissive 2.0, CC0 and Apache 2.0; see the
+              <a href="https://docs.overturemaps.org/attribution/" target="_blank" rel="noopener">source notices</a>.
+              Foursquare-derived records: Copyright 2024 Foursquare Labs, Inc.; transformed
+              into Overture's schema and filtered/reprojected here.</li>
           <li><strong>Terrain</strong> — the AWS
               <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a>
               open dataset (Mapzen terrarium encoding, from SRTM and national elevation models).</li>
@@ -222,6 +231,14 @@
               algorithm, from the real date, time and coordinates. Midsummer in Svalbard
               genuinely never gets dark.</li>
         </ul>
+
+        <h3>Live restaurant media</h3>
+        <p>An exact OSM Wikimedia Commons link or Wikidata identity may supply a freely
+        licensed logo or photo panel. Images keep their aspect ratio and are never guessed
+        from a name or scraped from an arbitrary business website.</p>
+        <div id="restaurant-media-credits">
+          <p>No licensed restaurant images have been loaded in this session yet.</p>
+        </div>
 
         <h3>What is invented</h3>
         <p>Interiors are procedurally generated: OSM knows a building's outline and its
@@ -274,6 +291,7 @@
         <button data-action="settings">Settings</button>
         <button data-action="controls">Controls</button>
         <button data-action="photo">Photo mode</button>
+        <button data-action="voxel">Voxel mode</button>
         <button data-action="place">Travel elsewhere</button>
         <button data-action="title">Quit to title</button>
       </nav>

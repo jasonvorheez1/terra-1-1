@@ -89,6 +89,7 @@ export const DEFAULTS = {
     regionSize: 1200,
     prefetchRadius: 1,
     useOvertureBuildings: true,
+    useOverturePlaces: true,
     cacheEnabled: true,
   },
 };
@@ -222,6 +223,7 @@ export const SCHEMA = [
       { key: 'regionSize', label: 'Map region size', type: 'select', options: [800, 1000, 1200, 1600, 2000], format: (v) => `${v} m`, note: 'Larger regions mean fewer, bigger downloads.' },
       { key: 'prefetchRadius', label: 'Prefetch radius', type: 'select', options: [0, 1, 2], format: (v) => ['Current region only', 'One region ahead', 'Two regions ahead'][v] },
       { key: 'useOvertureBuildings', label: 'Complete building coverage', type: 'toggle', note: 'Fills gaps in live OpenStreetMap with real footprints from the monthly Overture Maps buildings release.' },
+      { key: 'useOverturePlaces', label: 'Complete restaurant coverage', type: 'toggle', note: 'Fills missing restaurant POIs worldwide from the monthly Overture Maps Places release. Live OpenStreetMap remains preferred.' },
       { key: 'overpassTimeout', label: 'Map server timeout', type: 'range', min: 30, max: 180, step: 10, unit: ' s' },
       { key: 'cacheEnabled', label: 'Cache downloaded map data', type: 'toggle' },
       { key: '__cache', label: 'Storage', type: 'cache' },
@@ -243,6 +245,7 @@ export const DEFAULT_BINDINGS = {
   flyUp:     ['KeyR'],
   flyDown:   ['KeyF'],
   toggleHud: ['KeyH'],
+  voxel:     ['KeyV'],
   pause:     ['Escape'],
 };
 

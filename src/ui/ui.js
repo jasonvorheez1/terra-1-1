@@ -59,6 +59,7 @@ export class UI {
       'bindings-body', 'btn-reset-settings', 'btn-reset-bindings', 'loading-title',
       'loading-bar', 'loading-detail', 'loading-tip', 'btn-cancel-load', 'pause-summary',
       'worldmap', 'map-legend',
+      'restaurant-media-credits',
     ];
     for (const id of ids) this.el[id] = document.getElementById(id);
     this.screens = {};
@@ -84,6 +85,7 @@ export class UI {
     }
     if (name === 'settings') this.refreshSettings();
     if (name === 'pause') this.refreshPauseSummary();
+    if (name === 'about') this.refreshRestaurantMediaCredits();
     if (name === 'none') this.hideAll();
   }
 
@@ -179,6 +181,7 @@ export class UI {
       case 'title': this.game.quitToTitle(); break;
       case 'place': this.show('place'); break;
       case 'photo': this.game.togglePhotoMode(); break;
+      case 'voxel': this.game.toggleVoxelMode(); break;
       case 'random': {
         const p = randomPlace();
         this.selectPlace({ ...p, name: `Somewhere near ${p.near}` });
@@ -303,6 +306,7 @@ export class UI {
       name: found ? found.name : 'Unnamed point',
       short: found ? found.short : formatLatLon(lat, lon),
       country: found ? found.country : null,
+      countryCode: found ? found.countryCode : null,
       lat, lon,
     });
   }
@@ -491,7 +495,7 @@ export class UI {
       forward: 'Walk forward', back: 'Walk back', left: 'Step left', right: 'Step right',
       jump: 'Jump', sprint: 'Run', crouch: 'Crouch', interact: 'Interact / open door',
       map: 'Map', photo: 'Photo mode', flyUp: 'Fly up', flyDown: 'Fly down',
-      toggleHud: 'Hide interface', pause: 'Pause',
+      toggleHud: 'Hide interface', voxel: 'Voxel mode', pause: 'Pause',
     };
     const body = this.el['bindings-body'];
     body.innerHTML = '';
@@ -671,6 +675,45 @@ export class UI {
       `${netStats.requests} requests · ${netStats.cacheHits} from cache`,
     ];
     this.el['pause-summary'].textContent = lines.join('\n');
+  }
+
+  /** Render licence/creator credit for every Commons image used this session. */
+  refreshRestaurantMediaCredits() {
+    const box = this.el['restaurant-media-credits'];
+    if (!box) return;
+    const credits = Array.from(this.game.world?.restaurantMediaCredits?.values() || []);
+    box.replaceChildren();
+    if (!credits.length) {
+      const p = document.createElement('p');
+      p.textContent = 'No licensed restaurant images have been loaded in this session yet.';
+      box.appendChild(p);
+      return;
+    }
+    const intro = document.createElement('p');
+    intro.textContent = 'Restaurant signs or photo panels loaded from Wikimedia Commons:';
+    box.appendChild(intro);
+    const list = document.createElement('ul');
+    for (const credit of credits) {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = credit.sourceUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = credit.restaurant;
+      item.appendChild(link);
+      item.appendChild(document.createTextNode(
+        ` — ${credit.artist || 'Unknown creator'} · ${credit.licence || 'licence on source page'} · resized for facade display`));
+      if (credit.licenceUrl && /^https:\/\//i.test(credit.licenceUrl)) {
+        const licence = document.createElement('a');
+        licence.href = credit.licenceUrl;
+        licence.target = '_blank';
+        licence.rel = 'noopener';
+        licence.textContent = ' licence';
+        item.appendChild(licence);
+      }
+      list.appendChild(item);
+    }
+    box.appendChild(list);
   }
 
   // --- in-game map ---------------------------------------------------------

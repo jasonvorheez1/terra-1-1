@@ -22,6 +22,7 @@ import { reverseGeocode } from './geo/nominatim.js';
 import { formatLatLon, formatDistance, clamp, lerp, damp, DEG, RAD } from './core/util.js';
 import { elevation } from './geo/elevation.js';
 import { ndvi } from './geo/nasa.js';
+import { VoxelMode } from './voxel/mode.js';
 
 const FIXED_STEP = 1 / 90;          // physics tick
 const MAX_SUBSTEPS = 6;
@@ -57,6 +58,7 @@ class Game {
     this.weather = new WeatherSystem(this.scene, settings);
     this.controller = new CharacterController(this.world.collisionWorld, settings);
     this.interiors = new InteriorManager(this.scene, this.world, this.interiorContext());
+    this.voxel = new VoxelMode(this);
     this.ui = new UI(settings, this.input, this);
 
     // Say so when map data does not arrive. Terrain without OSM renders as bare
@@ -366,6 +368,7 @@ class Game {
       this.session = {
         lat: place.lat, lon: place.lon,
         placeName: place.name || null,
+        countryCode: place.countryCode || null,
         startedAt: performance.now(),
         timeMode: options.timeMode,
         fixedHour: options.fixedHour,
@@ -373,11 +376,31 @@ class Game {
         elapsed: 0,
       };
 
-      const info = await this.world.setLocation(place.lat, place.lon, {
-        date: baseDate,
-        onProgress: (p, msg) => { if (!abort.cancelled) this.ui.setLoading(p, msg); },
-      });
+      // Search results carry a country code. Typed coordinates do not, so run
+      // reverse-geocoding alongside the heavier terrain/OSM load and apply the
+      // answer before the first chunk is generated. That keeps asymmetric lane
+      // layouts correct in left-driving countries without slowing normal
+      // named-place travel.
+      const locationLookup = place.countryCode
+        ? Promise.resolve(null)
+        : reverseGeocode(place.lat, place.lon);
+      const [info, resolvedPlace] = await Promise.all([
+        this.world.setLocation(place.lat, place.lon, {
+          date: baseDate,
+          countryCode: place.countryCode,
+          onProgress: (p, msg) => { if (!abort.cancelled) this.ui.setLoading(p, msg); },
+        }),
+        locationLookup,
+      ]);
       if (abort.cancelled) return;
+
+      if (resolvedPlace?.countryCode && !place.countryCode) {
+        this.session.countryCode = resolvedPlace.countryCode;
+        this.world.setCountryCode(resolvedPlace.countryCode);
+      }
+      if (!this.session.placeName && resolvedPlace?.name) {
+        this.session.placeName = resolvedPlace.name;
+      }
 
       this.session.biome = info.biome;
       this.session.elevation = info.elevation;
@@ -511,6 +534,18 @@ class Game {
 
   // --- frame ---------------------------------------------------------------
 
+  /**
+   * Swap between walking the world and mining it.
+   *
+   * Both are the same session - same place, same time of day, same weather -
+   * so this is a change of what the ground is made of rather than a new game.
+   */
+  toggleVoxelMode() {
+    if (this.state !== 'playing' && !this.session) return;
+    this.voxel.toggle();
+    if (this.state === 'paused') this.resume();
+  }
+
   frame() {
     const raw = this.clock.getDelta();
     const dt = Math.min(raw, 0.1);          // never let a stall become a teleport
@@ -594,6 +629,7 @@ class Game {
     if (this.input.wasPressed('pause')) { this.pause(); return; }
     if (this.input.wasPressed('map')) { this.openMap(); return; }
     if (this.input.wasPressed('photo')) this.togglePhotoMode();
+    if (this.input.wasPressed('voxel')) { this.toggleVoxelMode(); return; }
     if (this.input.wasPressed('toggleHud')) {
       this.showHud = !this.showHud;
       this.ui.setHudVisible(this.showHud);
@@ -627,7 +663,13 @@ class Game {
     // Inside a cell the outdoor world is hidden and uncollided, so there is
     // nothing to be gained by continuing to stream it - and a great deal of
     // frame time to be saved by not doing so.
-    if (!this.interiors.isInside) {
+    if (this.voxel.active) {
+      // The polygon world is hidden and uncollided in voxel mode, so streaming
+      // it would be paying for a world nobody can see - but its elevation data
+      // is still what the blocks are generated from, and that comes from the
+      // terrain tiles rather than the chunks, so nothing is lost by stopping.
+      this.voxel.update(dt);
+    } else if (!this.interiors.isInside) {
       // Load what is in front of you first. Use the facing direction rather
       // than the velocity: standing still and looking down a street should
       // still bring that street in.
