@@ -336,9 +336,12 @@ export function buildLandcover(list, ctx, multi, collide) {
         uvScale: 0.16,
         heightFn: (x, z) => ctx.terrainAt(x, z) + lift,
         colourFn: vary,
-        // The terrain itself samples every 4 m at full detail, so there is no
-        // ground detail finer than this for the drape to miss.
-        maxEdge: 6,
+        // Follow the ground to within 25 cm. Measured over Central Park, that
+        // takes the gap between the grass you see and the ground you stand on
+        // from 1.34 m to 0.10 m, and the share of it more than a metre out from
+        // 48% to none, for 1.7x the land-cover triangles. Tightening to 15 cm
+        // costs a third again and buys almost nothing.
+        drape: { tolerance: 0.25, minEdge: 3, maxEdge: 64 },
       });
     } catch (e) {
       if (ctx.onError) ctx.onError('landcover', lc.source, e);

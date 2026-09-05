@@ -9,28 +9,40 @@ import * as THREE from 'three';
 import { triangulate, signedArea2 } from '../geometry.js';
 
 /**
- * Split a triangulation until no edge is longer than `maxEdge`.
+ * Subdivide a triangulation until it follows the ground beneath it.
  *
- * A polygon draped over terrain only samples the ground where it has
- * vertices, and an OSM ring has vertices where the mapper clicked - along its
- * boundary, never inside it. Ear clipping then spans the interior with a
- * handful of long triangles that cut straight across whatever the ground does
- * underneath, so a park the size of a chunk floats over its own dips: measured
- * in Central Park, a grass polygon sat 2.75 m above the terrain it was supposed
- * to be lying on, and since these surfaces carry no collision of their own you
- * walk through them on the way to the ground. Subdividing first gives the drape
- * interior points to sample.
+ * A polygon is draped by sampling the ground at its vertices, and an OSM ring
+ * only has vertices along its boundary - never inside it - so ear clipping
+ * spans the interior with a few long triangles that cut straight across
+ * whatever the terrain does underneath. Measured in Central Park, a grass
+ * polygon sat 2.75 m above the ground it was supposed to be lying on. These
+ * surfaces carry no collision, so you walk through the visible ground on the
+ * way down to the real one, and being front-facing they disappear when seen
+ * from below: a sheet hanging in the air that you fall straight through.
+ *
+ * The split is driven by how far the ground actually departs from the triangle
+ * rather than by edge length alone. Subdividing everything to a fixed size
+ * costs the same on a flat lawn as on a hillside and took land cover to 750k
+ * triangles a scene; measuring the sag at each candidate midpoint spends the
+ * triangles only where the ground bends. `maxEdge` remains as a ceiling, since
+ * the per-vertex colour wander needs vertices to vary across even when the
+ * ground is level.
  *
  * Midpoints are shared between the triangles either side of an edge, so the
- * result stays watertight - splitting each triangle alone would crack the seams
- * open. The cap is a guard against a pathological ring, not a target.
+ * result stays watertight - splitting each triangle alone would crack the
+ * seams open. The vertex cap guards against a pathological ring.
  */
-function subdivide(vertices, indices, maxEdge) {
+function subdivide(vertices, indices, { heightFn, tolerance = 0.15, minEdge = 2, maxEdge = 32 }) {
   const verts = Array.from(vertices);
   let tris = Array.from(indices);
-  const limit = maxEdge * maxEdge;
   const MAX_VERTS = 20000;
   const mids = new Map();
+  const heights = [];
+  const heightAt = (i) => {
+    let h = heights[i];
+    if (h === undefined) { h = heightFn(verts[i * 2], verts[i * 2 + 1]); heights[i] = h; }
+    return h;
+  };
   const midpoint = (a, b) => {
     const key = a < b ? `${a}:${b}` : `${b}:${a}`;
     let m = mids.get(key);
@@ -41,28 +53,33 @@ function subdivide(vertices, indices, maxEdge) {
     }
     return m;
   };
-  const long2 = (a, b) => {
-    const dx = verts[a * 2] - verts[b * 2], dz = verts[a * 2 + 1] - verts[b * 2 + 1];
-    return dx * dx + dz * dz;
+  // How badly a straight edge misses the ground at its midpoint, and how long
+  // it is. An edge shorter than minEdge is left alone however much it sags:
+  // past that point the terrain has no more detail to offer.
+  const edgeError = (a, b) => {
+    const ax = verts[a * 2], az = verts[a * 2 + 1];
+    const bx = verts[b * 2], bz = verts[b * 2 + 1];
+    const len = Math.hypot(ax - bx, az - bz);
+    if (len < minEdge) return 0;
+    if (len > maxEdge) return Infinity;
+    const sag = Math.abs(heightFn((ax + bx) / 2, (az + bz) / 2) - (heightAt(a) + heightAt(b)) / 2);
+    return sag > tolerance ? sag : 0;
   };
-  // Area features are clipped to a 256 m chunk, so the longest edge to start
-  // from is a ~362 m diagonal. Each pass halves the longest edge of a
-  // triangle, so reaching 6 m takes twelve; eight left it at 8.8 m.
   for (let pass = 0; pass < 14; pass++) {
     let split = false;
     const next = [];
     for (let i = 0; i < tris.length; i += 3) {
       const a = tris[i], b = tris[i + 1], c = tris[i + 2];
-      const ab = long2(a, b), bc = long2(b, c), ca = long2(c, a);
-      if (Math.max(ab, bc, ca) <= limit || verts.length / 2 >= MAX_VERTS) {
+      const eab = edgeError(a, b), ebc = edgeError(b, c), eca = edgeError(c, a);
+      if ((eab === 0 && ebc === 0 && eca === 0) || verts.length / 2 >= MAX_VERTS) {
         next.push(a, b, c);
         continue;
       }
-      // Split the longest edge only. Repeated passes reach the rest, and
-      // bisecting the longest edge keeps the triangles from growing slivers.
+      // Split the worst edge only. Later passes reach the rest, and bisecting
+      // one edge at a time keeps the triangles from degenerating into slivers.
       split = true;
-      if (ab >= bc && ab >= ca) { const m = midpoint(a, b); next.push(a, m, c, m, b, c); }
-      else if (bc >= ca) { const m = midpoint(b, c); next.push(b, m, a, m, c, a); }
+      if (eab >= ebc && eab >= eca) { const m = midpoint(a, b); next.push(a, m, c, m, b, c); }
+      else if (ebc >= eca) { const m = midpoint(b, c); next.push(b, m, a, m, c, a); }
       else { const m = midpoint(c, a); next.push(c, m, b, m, a, b); }
     }
     tris = next;
@@ -122,7 +139,7 @@ export class MeshAccumulator {
    */
   addPolygon(ring, holes, y, colour, {
     uvScale = 0.25, uvScaleV = null, faceUp = true, heightFn = null,
-    normalFn = null, uvOrigin = [0, 0], colourFn = null, maxEdge = 0,
+    normalFn = null, uvOrigin = [0, 0], colourFn = null, drape = null,
   } = {}) {
     // A separate V scale lets a surface be mapped into someone else's texture
     // space - a roof into the chunk's aerial photograph, say, where V runs the
@@ -132,7 +149,7 @@ export class MeshAccumulator {
     if (!indices.length) return 0;
     // Draping is only as good as the polygon's own vertices, so give a big
     // one some interior points before sampling the ground.
-    if (maxEdge > 0 && heightFn) ({ vertices, indices } = subdivide(vertices, indices, maxEdge));
+    if (drape && heightFn) ({ vertices, indices } = subdivide(vertices, indices, { heightFn, ...drape }));
     const [r, g, b] = colour;
     const base = this.count;
     const n = vertices.length / 2;
