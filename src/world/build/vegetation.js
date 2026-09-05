@@ -396,7 +396,7 @@ export function collectTrees(features, chunk, ctx) {
     const rng = makeRng(hashString(`tree${t.id}`));
     let id = speciesFromTag(t.species);
     if (!id && t.leafType === 'needleleaved') id = 'spruce';
-    if (!id) id = pickSpecies(ctx.biome.id, rng, ctx.region);
+    if (!id) id = pickSpecies(ctx.biomeAt(t.x, t.z).id, rng, ctx.region);
     if (!id) continue;
     const sp = SPECIES[id];
     const height = t.height || (t.circumference ? clamp(t.circumference * 7, 3, 40)
@@ -407,7 +407,10 @@ export function collectTrees(features, chunk, ctx) {
   // 2. Tree rows, planted along the way at the tagged spacing.
   for (const row of features.treeRows) {
     const rng = makeRng(hashString(`row${row.id}`));
-    let id = speciesFromTag(row.species) || pickSpecies(ctx.biome.id, rng, ctx.region);
+    // A row can run for a kilometre; take the biome at the end it starts from.
+    const rowAt = row.pts[0];
+    let id = speciesFromTag(row.species)
+      || pickSpecies(ctx.biomeAt(rowAt[0], rowAt[1]).id, rng, ctx.region);
     if (!id) continue;
     const spacing = clamp(row.spacing || 8, 3, 30);
     for (let i = 1; i < row.pts.length; i++) {
@@ -452,7 +455,7 @@ export function collectTrees(features, chunk, ctx) {
       if (rng() > 0.55 + fbm2(x * 0.03, z * 0.03, 2) * 0.45) continue;
       const id = lc.spec.cover === 'orchard' || lc.spec.cover === 'vineyard'
         ? (lc.spec.cover === 'vineyard' ? 'shrub' : 'olive')
-        : pickSpecies(ctx.biome.id, rng, ctx.region);
+        : pickSpecies(ctx.biomeAt(x, z).id, rng, ctx.region);
       if (!id) continue;
       const sp = SPECIES[id];
       const scale = lc.spec.cover === 'forest' ? 1 : 0.85;

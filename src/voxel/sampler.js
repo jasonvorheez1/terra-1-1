@@ -72,8 +72,19 @@ export class TerrainSampler {
     this.world = world;
     this.includeBuildings = options.includeBuildings !== false;
     this.treeDensity = options.treeDensity ?? 1;
-    this.cover = SURFACE[world.biome && world.biome.id] || SURFACE.temperateBroadleaf;
     this._buildingCache = new Map();
+  }
+
+  /**
+   * Ground cover for the biome at a point.
+   *
+   * The same lookup the walking world uses, so the two agree: walk into a
+   * desert in one and the sand starts in the same place in the other. Only the
+   * expression differs - polygons take a colour, blocks take a block.
+   */
+  coverAt(x, z) {
+    const biome = this.world.biomeAt(x, z);
+    return SURFACE[biome && biome.id] || SURFACE.temperateBroadleaf;
   }
 
   /**
@@ -93,7 +104,7 @@ export class TerrainSampler {
     const dz = world.terrainAt(x, z + 1) - world.terrainAt(x, z - 1);
     const slope = Math.hypot(dx, dz) / 2;            // metres of rise per metre
 
-    let { surface, soil } = this.cover;
+    let { surface, soil } = this.coverAt(x, z);
     let soilDepth = 3;
     if (slope > 0.85) { surface = STONE; soil = STONE; soilDepth = 0; }
     else if (slope > 0.55) { surface = GRAVEL; soil = STONE; soilDepth = 1; }
@@ -192,11 +203,12 @@ export class TerrainSampler {
    * reaches across, and the grid holds those blocks until that chunk exists.
    */
   decorate(grid, chunk, originX, originZ) {
-    const density = this.cover.trees * this.treeDensity;
-
     for (let lz = 0; lz < CHUNK; lz++) {
       for (let lx = 0; lx < CHUNK; lx++) {
         const bx = originX + lx, bz = originZ + lz;
+        // How thickly trees stand is a property of the place, not the session:
+        // a chunk that straddles the edge of a wood should thin out across it.
+        const density = this.coverAt(bx + 0.5, bz + 0.5).trees * this.treeDensity;
         const col = this.column(bx, bz);
         if (col.height < -9000) continue;
         const groundY = Math.floor(col.height);

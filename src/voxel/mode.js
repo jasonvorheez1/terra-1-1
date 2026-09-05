@@ -262,6 +262,10 @@ export class VoxelMode {
     const game = this.game;
     const c = game.controller;
 
+    // The polygon world is not streaming here, but its vegetation raster is
+    // what decides which biome each block belongs to, so it still has to keep
+    // up with where you have walked.
+    game.world.ensureVegetation(c.position.x, c.position.z);
     this.streamChunks(c.position.x, c.position.z, game.fps < 40 ? 3 : 7);
     this.handleKeys();
     if (this.craftOpen) {

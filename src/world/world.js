@@ -18,7 +18,7 @@ import {
   extractFeatures, mergeOvertureBuildings, mergeOvertureRoads,
   mergeOvertureRestaurantPlaces, assignEntrances, assignRestaurantBusinesses,
   verticalProfile, inferMissingHeights, inferBuildingKinds,
-  inferSuburbanHousing, FeatureSet,
+  inferSuburbanHousing, inferCommercialSites, FeatureSet,
 } from './features.js';
 import { buildGradingField } from './build/grading.js';
 import { MultiMesh, clipHalfPlane, colourToLinear } from './build/mesh.js';
@@ -50,6 +50,7 @@ const TERRAIN_RES = { low: 25, medium: 41, high: 65 };
 const DETAIL_RANK = { low: 0, medium: 1, high: 2 };
 const DETAIL_NAME = ['low', 'medium', 'high'];
 const DETAIL_BANDS = [340, 850];      // high inside 340 m, medium inside 850 m
+const BIOME_CELL = 128;               // metres between biome samples
 
 // Covers that actually grow blades. `urban` and `bare` carry a little greenery
 // in their tint, which is a statement about colour, not about grass.
@@ -121,7 +122,8 @@ export class World {
     this.grading = null;
     this.profiles = new WeakMap();       // road -> vertical profile
 
-    this.biome = classifyBiome(0, 0, 0.4);
+    this.biome = classifyBiome(0, 0, 0.4);   // the one you spawned in
+    this._biomeCache = new Map();
     this.season = 0.6;
     this.ready = false;
     this.visible = true;
@@ -151,6 +153,9 @@ export class World {
         return this.projection.toGeo(c[0], c[1]);
       },
       get biome() { return this.__world.biome; },
+      // An arrow here, so `this` is the World - the getters beside it are
+      // methods on the context object and reach it through __world instead.
+      biomeAt: (x, z) => this.biomeAt(x, z),
       // Which part of the world we are in, for the facade palettes and the
       // tree species tables. Set once per session from the origin.
       get region() { return this.__world.region; },
@@ -206,6 +211,7 @@ export class World {
 
     const groundElevation = elevation.sample(lat, lon, 0);
     const ndviHere = ndvi.sample(lat, lon);
+    this._biomeCache.clear();
     this.biome = classifyBiome(lat, groundElevation, ndviHere);
     this.season = seasonalPhase(date, lat);
     this.baseElevation = groundElevation;
@@ -286,6 +292,33 @@ export class World {
   }
 
   /** Ground height as built: elevation, graded to the roads crossing it. */
+  /**
+   * The biome at a point, rather than for the whole session.
+   *
+   * The classifier already takes latitude, elevation and the satellite's
+   * greenness reading, all three of which vary as you walk - but it was only
+   * ever called once, at the origin, so a session that started in woodland
+   * stayed woodland however far you went. Sampling it per place is what makes
+   * the tree line on a mountain, the edge of a desert, and the treeless ground
+   * above it happen on their own, from the same data the walking world was
+   * already drawing.
+   *
+   * Cached on a 128 m grid. Finer than that buys nothing - NDVI's own raster
+   * is coarser - and the lookup runs per column when the voxel world builds.
+   */
+  biomeAt(x, z) {
+    const key = Math.round(x / BIOME_CELL) + ',' + Math.round(z / BIOME_CELL);
+    let b = this._biomeCache.get(key);
+    if (b) return b;
+    const geo = this.projection.toGeo(x, z);
+    b = classifyBiome(geo.lat, this.rawTerrainAt(x, z), ndvi.sample(geo.lat, geo.lon));
+    // Only remember it once the satellite has actually reported. Before the
+    // tile lands every point reads as the fallback greenness, and caching that
+    // would leave a desert classified as woodland for the rest of the session.
+    if (ndvi.covered(geo.lat, geo.lon)) this._biomeCache.set(key, b);
+    return b;
+  }
+
   terrainAt(x, z) {
     const raw = this.rawTerrainAt(x, z);
     if (!this.grading) return raw;
@@ -343,8 +376,10 @@ export class World {
       if (region.detailReady && !fs.__detail) {
         const extra = extractFeatures(region.data, this.projection, { seen: this.seenFeatures });
         mergeFeatures(fs, extra);
-        assignEntrances(fs);
         assignRestaurantBusinesses(fs);
+        inferBuildingKinds(fs);
+        inferMissingHeights(fs);
+        assignEntrances(fs);
         fs.__detail = true;
         this.indexFeatures(extra);
       }
@@ -371,6 +406,10 @@ export class World {
         fs, region.overtureSegments, this.projection, { seen: this.seenFeatures });
     }
     reconcileBuildingParts(fs);
+    // Business points are semantic building data. They have to land before
+    // kind and height inference, otherwise an accurately named restaurant can
+    // already have been committed to a generic house or office tower.
+    assignRestaurantBusinesses(fs);
     // Only after both real footprint sources have been exhausted do mapped-but
     // unbuilt residential zones receive clearly marked synthetic houses.
     if (this.settings.world.inferHousing) inferSuburbanHousing(fs);
@@ -381,7 +420,7 @@ export class World {
     // anything is built from those heights.
     inferMissingHeights(fs);
     assignEntrances(fs);
-    assignRestaurantBusinesses(fs);
+    fs.__commercialSites = inferCommercialSites(fs);
     fs.__detail = region.detailReady;
     fs.__attempt = region.attempts;
     this.regionFeatures.set(region.key, fs);
@@ -506,7 +545,31 @@ export class World {
    * Called every frame. Requests data, queues chunk builds, evicts what is
    * behind you, and spends a fixed slice of the frame actually building.
    */
+  /**
+   * Keep the vegetation raster loaded ahead of the walker.
+   *
+   * It was fetched once, for a 4.4 km box around the origin, which was fine
+   * when the biome was decided once at the origin too. Now that it is sampled
+   * where you are standing, walking out of that box would quietly drop every
+   * biome back to the fallback. One request per box, and only when the ground
+   * under you is uncovered.
+   */
+  ensureVegetation(px, pz) {
+    if (!this.settings.world.useNasaVegetation) return;
+    const geo = this.projection.toGeo(px, pz);
+    if (ndvi.covered(geo.lat, geo.lon)) return;
+    const key = Math.round(px / 3000) + ',' + Math.round(pz / 3000);
+    if (this._ndviPending === key) return;
+    this._ndviPending = key;
+    const bbox = this.projection.localRectToBBox(px - 2200, pz - 2200, px + 2200, pz + 2200);
+    ndvi.preload(bbox)
+      .then(() => { this._biomeCache.clear(); })
+      .catch(() => {})
+      .finally(() => { if (this._ndviPending === key) this._ndviPending = null; });
+  }
+
   update(px, pz, dt, budgetMs = 6, heading = null) {
+    this.ensureVegetation(px, pz);
     if (!this.ready) return;
     this.lastViewer = { x: px, z: pz };
 
@@ -681,7 +744,7 @@ export class World {
     const geo = this.projection.toGeo(x, z);
     const v = ndvi.sample(geo.lat, geo.lon);
     const lushness = clamp(v * 1.6, 0.2, 1.4) * clamp(best.spec.veg * 2, 0.3, 1.5);
-    const colour = new THREE.Color(biomeGroundColour(this.biome, v, this.season));
+    const colour = new THREE.Color(biomeGroundColour(this.biomeAt(x, z), v, this.season));
     return { grass: true, y: this.terrainAt(x, z) + 0.01, lushness, colour };
   }
 
@@ -776,7 +839,7 @@ export class World {
     chunk.terrain = buildTerrain(chunk, ctx, { resolution: res });
     const terrainMesh = new THREE.Mesh(
       chunk.terrain.geometry,
-      this.materials.terrain(null, this.biome && this.biome.id),
+      this.materials.terrain(null, this.biomeAt(chunk.centreX, chunk.centreZ).id),
     );
     terrainMesh.receiveShadow = true;
     terrainMesh.castShadow = false;

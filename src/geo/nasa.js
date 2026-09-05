@@ -137,6 +137,21 @@ export class VegetationIndexService {
   }
 
   /** Load the tiles covering a bbox so `sample` can answer synchronously. */
+  /**
+   * Is there actually a tile under this point?
+   *
+   * `sample` returns `defaultNdvi` both where the satellite saw nothing and
+   * where we simply have not fetched the tile yet, and those are very
+   * different things: the first is an answer, the second is a guess that will
+   * change. Anything caching a result derived from NDVI has to be able to tell
+   * them apart, or it caches the guess forever.
+   */
+  covered(lat, lon) {
+    if (!this.enabled) return false;
+    const z = this.zoom;
+    return this.tiles.has(this.key(z, Math.floor(lonToTileX(lon, z)), Math.floor(latToTileY(lat, z))));
+  }
+
   async preload(bbox) {
     if (!this.enabled) return;
     const z = this.zoom;

@@ -723,6 +723,7 @@ class Game {
     this.weather.update(dt, this.camera.position, this.interiors.isInside);
     this.updateLights();
     this.updateAudio(dt, move);
+    this.updateBiome(dt);
     this.updateHud(dt);
 
     this.materials.updateForSun(this.sky.state.elevation, dt);
@@ -868,6 +869,30 @@ class Game {
    * a run stutter between running and walking several times a second. Once you
    * are spent you stay spent until you have a third of it back.
    */
+  /**
+   * Notice when you have walked into somewhere different.
+   *
+   * Biomes are sampled per place now, so crossing from woodland into scrub is
+   * something that happens while you walk rather than something fixed when you
+   * arrived. Announcing it needs a delay: a boundary is a line on a satellite
+   * raster, and standing on one would otherwise flip the toast back and forth.
+   */
+  updateBiome(dt) {
+    const p = this.controller.position;
+    const here = this.world.biomeAt(p.x, p.z);
+    this.currentBiome = here;
+    if (!this._announcedBiome) {
+      this._announcedBiome = here;
+      return;
+    }
+    if (here.id === this._announcedBiome.id) { this._biomeHold = 0; return; }
+    this._biomeHold = (this._biomeHold || 0) + dt;
+    if (this._biomeHold < 4) return;
+    this._biomeHold = 0;
+    this._announcedBiome = here;
+    this.ui.toast(here.label, 'You have walked into somewhere different.');
+  }
+
   updateStamina(dt, sprinting, move) {
     if (!settings.gameplay.stamina) {
       this.stamina = 1;
@@ -1163,7 +1188,7 @@ class Game {
         `regions ${s.regions}   ${this.interiors.isInside ? `INSIDE ${this.interiors.current.building.name || this.interiors.current.building.source} (${this.interiors.stats.lastBuildMs.toFixed(0)} ms to build)` : 'outdoors'}`,
         `net    ${netStats.requests} req, ${netStats.cacheHits} cached, ${netStats.errors} errors, ${netStats.inflight} live`,
         `sun    ${sky.elevation.toFixed(1)}° elev, ${sky.azimuth.toFixed(0)}° az, ${phase}`,
-        `biome  ${this.session.biome ? this.session.biome.label : '?'}  ndvi ${ndvi.sample(geo.lat, geo.lon).toFixed(2)}`,
+        `biome  ${(this.currentBiome || this.session.biome || {}).label || '?'}  ndvi ${ndvi.sample(geo.lat, geo.lon).toFixed(2)}`,
         this.world.errors.length ? `errors: ${this.world.errors.slice(-2).join(' | ')}` : '',
       ].filter(Boolean).join('\n'));
     } else {
